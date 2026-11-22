@@ -1,0 +1,536 @@
+{
+  "name": "NEXO - News Collector",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 30
+            }
+          ]
+        }
+      },
+      "id": "cron-trigger",
+      "name": "Cron 30min",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [240, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "const startTime = Date.now();\n$execution.customData.set('start_time', String(startTime));\n$execution.customData.set('total_mentions', '0');\n$execution.customData.set('total_alerts', '0');\n$execution.customData.set('errors', '[]');\nconsole.log('[NEXO News] Iniciando coleta - ' + new Date().toISOString());\nreturn [{ json: { start_time: startTime, timestamp: new Date().toISOString() } }];"
+      },
+      "id": "init-execution",
+      "name": "Init Execution",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 400]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT me.*, c.name as campaign_name FROM monitored_entities me JOIN campaigns c ON c.id = me.campaign_id WHERE me.is_active = true ORDER BY me.entity_type, me.name",
+        "options": {}
+      },
+      "id": "fetch-entities",
+      "name": "Buscar Entidades Ativas",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [680, 400],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-nexo",
+          "name": "Postgres NEXO"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const entities = $input.all();\nif (!entities || entities.length === 0) {\n  console.log('[NEXO News] Nenhuma entidade monitorada ativa encontrada.');\n  return [];\n}\nconsole.log('[NEXO News] Entidades encontradas: ' + entities.length);\nreturn entities.map(e => ({ json: e.json }));"
+      },
+      "id": "validate-entities",
+      "name": "Validar Entidades",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 400]
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "loop-entities",
+      "name": "Loop por Entidade",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [1120, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "const entity = $input.first().json;\nconst entityName = entity.name || '';\nconst entityType = entity.entity_type || 'candidate';\n\nlet searchQuery = `\\\"${entityName}\\\" notícias`;\nif (entityType === 'candidate') searchQuery = `\\\"${entityName}\\\" candidato político notícias`;\nelse if (entityType === 'opponent') searchQuery = `\\\"${entityName}\\\" adversário político`;\nelse if (entityType === 'party') searchQuery = `\\\"${entityName}\\\" partido político`;\nelse if (entityType === 'influencer') searchQuery = `\\\"${entityName}\\\" influenciador`;\nelse if (entityType === 'portal') searchQuery = `site:${entityName}`;\n\nconst encodedQuery = encodeURIComponent(searchQuery);\nconsole.log('[NEXO News] Pesquisando entidade: ' + entityName + ' | Query: ' + searchQuery);\n\nreturn [{ json: { ...entity, search_query: searchQuery, encoded_query: encodedQuery } }];"
+      },
+      "id": "build-search-query",
+      "name": "Construir Query de Pesquisa",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1340, 400]
+    },
+    {
+      "parameters": {
+        "url": "=https://serpapi.com/search.json",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "q", "value": "={{ $json.search_query }}" },
+            { "name": "tbm", "value": "nws" },
+            { "name": "num", "value": "10" },
+            { "name": "hl", "value": "pt-BR" },
+            { "name": "gl", "value": "br" },
+            { "name": "tbs", "value": "qdr:d" },
+            { "name": "api_key", "value": "={{ $env.SERPAPI_KEY }}" }
+          ]
+        },
+        "options": {
+          "timeout": 15000,
+          "retry": {
+            "enabled": true,
+            "maxAttempts": 3
+          }
+        }
+      },
+      "id": "search-news-serpapi",
+      "name": "Pesquisar Notícias (SerpAPI)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1560, 300],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "url": "=https://newsapi.org/v2/everything",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "q", "value": "={{ $('Construir Query de Pesquisa').item.json.name }}" },
+            { "name": "language", "value": "pt" },
+            { "name": "sortBy", "value": "publishedAt" },
+            { "name": "pageSize", "value": "10" },
+            { "name": "apiKey", "value": "={{ $env.NEWSAPI_KEY }}" }
+          ]
+        },
+        "options": {
+          "timeout": 15000,
+          "retry": {
+            "enabled": true,
+            "maxAttempts": 3
+          }
+        }
+      },
+      "id": "search-news-newsapi",
+      "name": "Pesquisar Notícias (NewsAPI)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1560, 500],
+      "disabled": true,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const entity = $('Construir Query de Pesquisa').first()?.json || {};\nconst serpItems = $('Pesquisar Notícias (SerpAPI)').all();\nlet newsApiItems = [];\ntry { newsApiItems = $('Pesquisar Notícias (NewsAPI)').all(); } catch (e) { newsApiItems = []; }\n\nlet articles = [];\n\n// Processar SerpAPI\ntry {\n  const serpData = serpItems[0]?.json || {};\n  if (serpData.news_results && Array.isArray(serpData.news_results)) {\n    const serpArticles = serpData.news_results.map(a => ({\n      title: a.title || '',\n      url: a.link || '',\n      source_name: a.source?.name || a.source || '',\n      published_at: a.date || new Date().toISOString(),\n      snippet: a.snippet || '',\n      author: a.author || '',\n      api_source: 'serpapi'\n    }));\n    articles = [...articles, ...serpArticles];\n  }\n} catch(e) { console.log('[NEXO] Erro SerpAPI: ' + e.message); }\n\n// Processar NewsAPI\ntry {\n  const newsData = newsApiItems[0]?.json || {};\n  if (newsData.articles && Array.isArray(newsData.articles)) {\n    const newsArticles = newsData.articles\n      .filter(a => a.title && a.title !== '[Removed]')\n      .map(a => ({\n        title: a.title || '',\n        url: a.url || '',\n        source_name: a.source?.name || '',\n        published_at: a.publishedAt || new Date().toISOString(),\n        snippet: a.description || '',\n        content: a.content || '',\n        author: a.author || '',\n        api_source: 'newsapi'\n      }));\n    articles = [...articles, ...newsArticles];\n  }\n} catch(e) { console.log('[NEXO] Erro NewsAPI: ' + e.message); }\n\n// Deduplica por URL\nconst seen = new Set();\nconst unique = articles.filter(a => {\n  if (!a.url || seen.has(a.url)) return false;\n  seen.add(a.url);\n  return true;\n});\n\n// Converte datas do SerpAPI (relativas: 'ha 2 dias', '2 weeks ago'; absolutas: '16/07/2026', '16 de jul. de 2026') em ISO real.\nfunction parseNewsDate(raw) {\n  if (!raw) return null;\n  const s = String(raw).trim();\n  const low = s.toLowerCase().normalize('NFD').replace(/[\\u0300-\\u036f]/g, '');\n  const now = Date.now();\n  const UNIT_MS = { minuto: 60000, min: 60000, minute: 60000, hora: 3600000, hour: 3600000, dia: 86400000, day: 86400000, semana: 604800000, week: 604800000, mes: 2592000000, month: 2592000000, ano: 31536000000, year: 31536000000 };\n  const rel = low.match(/(\\d+)\\s*(minutos?|mins?|minutes?|horas?|hours?|dias?|days?|semanas?|weeks?|mes(?:es)?|months?|anos?|years?)/);\n  if (rel && /(\\bha\\b|atras|\\bago\\b)/.test(low)) {\n    const unit = rel[2];\n    const ms = UNIT_MS[unit] || UNIT_MS[unit.replace(/es$/, '')] || UNIT_MS[unit.replace(/s$/, '')];\n    if (ms) return new Date(now - parseInt(rel[1], 10) * ms).toISOString();\n  }\n  if (/ontem|yesterday/.test(low)) return new Date(now - 86400000).toISOString();\n  if (/\\bhoje\\b|\\btoday\\b|\\bagora\\b|\\bnow\\b/.test(low)) return new Date(now).toISOString();\n  const br = s.match(/^(\\d{1,2})\\/(\\d{1,2})\\/(\\d{4})/);\n  if (br) return new Date(Date.UTC(+br[3], +br[2] - 1, +br[1], 12)).toISOString();\n  const meses = ['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];\n  const ptm = low.match(/(\\d{1,2})\\s*(?:de\\s*)?(jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez)\\w*\\.?\\s*(?:de\\s*)?(\\d{4})/);\n  if (ptm) return new Date(Date.UTC(+ptm[3], meses.indexOf(ptm[2]), +ptm[1], 12)).toISOString();\n  const d = new Date(s);\n  if (!isNaN(d.getTime())) return d.toISOString();\n  return null;\n}\n\n// Descarta artigos com mais de 7 dias (defesa extra alem do tbs=qdr:w da busca).\nconst cutoff = Date.now() - 7 * 86400000;\nconst fresh = unique\n  .map(a => ({ ...a, published_at_parsed: parseNewsDate(a.published_at) }))\n  .filter(a => a.published_at_parsed === null || new Date(a.published_at_parsed).getTime() >= cutoff);\n\nconsole.log('[NEXO News] Entidade: ' + entity.name + ' | Artigos: ' + unique.length + ' | Recentes (<=7d): ' + fresh.length);\n\nif (fresh.length === 0) {\n  return [{ json: { ...entity, no_articles: true } }];\n}\n\nreturn fresh.map(a => ({ json: { ...entity, article: a } }));"
+      },
+      "id": "merge-news-sources",
+      "name": "Mesclar Fontes de Notícias",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1800, 400]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.no_articles }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "equals" }
+            }
+          ]
+        }
+      },
+      "id": "check-has-articles",
+      "name": "Tem Artigos?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [2020, 400]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.article.url }}",
+        "options": {
+          "timeout": 10000,
+          "response": {
+            "response": {
+              "fullResponse": false
+            }
+          }
+        }
+      },
+      "id": "fetch-article-content",
+      "name": "Coletar Conteúdo do Artigo",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2240, 300],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Roda 1x por item: $('Nó').item resolve o item pareado corretamente.\nconst item = $('Mesclar Fontes de Notícias').item.json;\n\n// Extrair HTML da resposta do HTTP Request\nconst httpResponse = $input.item.json;\nconst rawHtml = httpResponse?.data || httpResponse?.body || httpResponse?.html || (typeof httpResponse === 'string' ? httpResponse : '') || '';\n\nlet cleanContent = '';\nif (rawHtml && typeof rawHtml === 'string') {\n  cleanContent = rawHtml\n    .replace(/<script[\\s\\S]*?<\\/script>/gi, '')\n    .replace(/<style[\\s\\S]*?<\\/style>/gi, '')\n    .replace(/<[^>]+>/g, ' ')\n    .replace(/&nbsp;/g, ' ')\n    .replace(/&amp;/g, '&')\n    .replace(/&lt;/g, '<')\n    .replace(/&gt;/g, '>')\n    .replace(/&quot;/g, '\"')\n    .replace(/\\s+/g, ' ')\n    .trim()\n    .substring(0, 3000);\n}\n\nconst finalContent = cleanContent || item.article?.snippet || item.article?.content || '';\n\nconsole.log('[NEXO News] campaign_id=' + item.campaign_id + ' | entity_id=' + item.id + ' | url=' + item.article?.url);\n\nreturn { json: { ...item, article: { ...item.article, full_content: finalContent } } };"
+      },
+      "id": "extract-content",
+      "name": "Extrair Conteúdo Limpo (FIXED)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2460, 300]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Analise esta notícia sobre {{ $json.name }} ({{ $json.entity_type }}):\n\nTÍTULO: {{ $json.article.title || '' }}\nFONTE: {{ $json.article.source_name || '' }}\nCONTEÚDO: {{ $json.article.full_content || '' }}\n\nIMPORTANTE: o campo sentiment deve refletir o sentimento da notícia EM RELAÇÃO a {{ $json.name }}, não o tom geral da matéria.\n\nRetorne JSON com esta estrutura exata:\n{\n  \"sentiment\": \"positive\" | \"neutral\" | \"negative\",\n  \"relevance_score\": 0.0-1.0,\n  \"impact_score\": 0.0-1.0,\n  \"summary\": \"resumo em 2-3 frases\",\n  \"principais_temas\": [\"tema1\", \"tema2\"],\n  \"citacao_direta\": true/false,\n  \"mencao_adversario\": true/false,\n  \"criticidade\": \"low\" | \"medium\" | \"high\" | \"critical\",\n  \"justificativa\": \"breve justificativa da análise\"\n}",
+        "messages": {
+          "messageValues": [
+            {
+              "message": "Você é um analista político especializado em monitoramento de mídia brasileira. Analise notícias e retorne APENAS JSON válido, sem markdown, sem texto antes ou depois."
+            }
+          ]
+        },
+        "batching": {}
+      },
+      "id": "analyze-llm-chain",
+      "name": "Analisar com IA (OpenRouter)",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.5,
+      "position": [2680, 300],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "model": "openai/gpt-4o-mini",
+        "options": {
+          "temperature": 0.1,
+          "maxTokens": 800,
+          "responseFormat": "json_object"
+        }
+      },
+      "id": "openrouter-chat-model",
+      "name": "OpenRouter Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenRouter",
+      "typeVersion": 1,
+      "position": [2620, 520],
+      "credentials": {
+        "openRouterApi": {
+          "id": "openrouter-nexo",
+          "name": "OpenRouter NEXO"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Casa artigo x resposta da IA POR POSICAO: o Basic LLM Chain nao propaga\n// paired item, entao a referencia .item quebra. $input.all() preserva a ordem 1:1.\nconst artigos = $('Extrair Conteúdo Limpo (FIXED)').all();\nconst respostas = $input.all();\n\nreturn artigos.map((art, i) => {\n  const item = art.json;\n  const aiResponse = respostas[i]?.json || {};\n\n  let analysis = {\n    sentiment: 'neutral',\n    relevance_score: 0.5,\n    impact_score: 0.5,\n    summary: item.article?.snippet || '',\n    principais_temas: [],\n    citacao_direta: false,\n    mencao_adversario: false,\n    criticidade: 'low',\n    justificativa: ''\n  };\n\n  try {\n    // Basic LLM Chain devolve o texto em .text (ou .output em versoes mais novas).\n    const raw = aiResponse?.text ?? aiResponse?.output ?? '{}';\n    if (raw && typeof raw === 'object') {\n      analysis = { ...analysis, ...raw };\n    } else {\n      const cleaned = String(raw).replace(/```json\\n?/g, '').replace(/```\\n?/g, '').trim();\n      analysis = { ...analysis, ...JSON.parse(cleaned) };\n    }\n  } catch(e) {\n    console.log('[NEXO] Erro ao parsear IA: ' + e.message);\n  }\n\n  // Usa a data ja parseada no no de mesclagem; so cai em 'agora' em ultimo caso.\n  let parsedDate = item.article?.published_at_parsed || null;\n  if (!parsedDate) {\n    const d = new Date(item.article?.published_at || '');\n    parsedDate = isNaN(d.getTime()) ? new Date().toISOString() : d.toISOString();\n  }\n\n  const mention = {\n    campaign_id: item.campaign_id,\n    entity_id: item.id,\n    source: 'news',\n    title: (item.article?.title || '').substring(0, 500),\n    content: item.article?.full_content || item.article?.snippet || '',\n    sentiment: analysis.sentiment,\n    url: item.article?.url || '',\n    published_at: parsedDate,\n    created_at: new Date().toISOString(),\n    metadata: {\n      source_name: item.article?.source_name || '',\n      author: item.article?.author || '',\n      relevance_score: analysis.relevance_score,\n      impact_score: analysis.impact_score,\n      summary: analysis.summary,\n      principais_temas: analysis.principais_temas,\n      citacao_direta: analysis.citacao_direta,\n      mencao_adversario: analysis.mencao_adversario,\n      criticidade: analysis.criticidade,\n      justificativa: analysis.justificativa,\n      api_source: item.article?.api_source || 'unknown',\n      entity_type: item.entity_type,\n      entity_name: item.name\n    }\n  };\n\n  return { json: { mention, analysis, entity: item } };\n});"
+      },
+      "id": "build-mention",
+      "name": "Construir Mention",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2900, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://SEU_PROJECT_REF.supabase.co/rest/v1/mentions?on_conflict=url,entity_id",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" },
+            { "name": "Prefer", "value": "resolution=ignore-duplicates,return=representation" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.mention) }}",
+        "options": {}
+      },
+      "id": "save-mention",
+      "name": "Salvar Mention no Supabase",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [3120, 300],
+      "credentials": {
+        "supabaseApi": {
+          "id": "supabase-nexo",
+          "name": "Supabase NEXO"
+        }
+      },
+      "alwaysOutputData": true,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const mentions = $('Construir Mention').all();\nconst alerts = [];\nconst now = new Date().toISOString();\n\nfor (const _m of mentions) {\nconst item = _m.json;\nconst analysis = item.analysis || {};\nconst entity = item.entity || {};\nconst mention = item.mention || {};\nconst mentionAlerts = [];\n\n// Regra 1: Sentimento negativo crítico\nif (analysis.sentiment === 'negative' && analysis.impact_score >= 0.7) {\n  mentionAlerts.push({\n    campaign_id: entity.campaign_id,\n    entity_id: entity.id,\n    type: 'negative_sentiment',\n    title: `Cobertura Negativa: ${entity.name}`,\n    description: `Notícia com sentimento negativo de alto impacto detectada: \"${mention.title}\"`,\n    severity: analysis.impact_score >= 0.9 ? 'critical' : 'high',\n    source_url: mention.url,\n    metadata: JSON.stringify({ relevance_score: analysis.relevance_score, impact_score: analysis.impact_score, source: mention.metadata?.source_name }),\n    created_at: now,\n    read: false\n  });\n}\n\n// Regra 2: Matéria altamente relevante\nif (analysis.relevance_score >= 0.85) {\n  mentionAlerts.push({\n    campaign_id: entity.campaign_id,\n    entity_id: entity.id,\n    type: 'high_relevance',\n    title: `Alta Relevância: ${entity.name}`,\n    description: `Matéria de alta relevância detectada: \"${mention.title}\"`,\n    severity: 'high',\n    source_url: mention.url,\n    metadata: JSON.stringify({ relevance_score: analysis.relevance_score, temas: analysis.principais_temas }),\n    created_at: now,\n    read: false\n  });\n}\n\n// Regra 3: Citação direta do candidato\nif (analysis.citacao_direta && entity.entity_type === 'candidate') {\n  mentionAlerts.push({\n    campaign_id: entity.campaign_id,\n    entity_id: entity.id,\n    type: 'direct_quote',\n    title: `Citação Direta: ${entity.name}`,\n    description: `${entity.name} foi citado diretamente em: \"${mention.title}\"`,\n    severity: analysis.sentiment === 'negative' ? 'high' : 'medium',\n    source_url: mention.url,\n    metadata: JSON.stringify({ sentiment: analysis.sentiment, source: mention.metadata?.source_name }),\n    created_at: now,\n    read: false\n  });\n}\n\n// Regra 4: Citação direta do adversário\nif (analysis.citacao_direta && entity.entity_type === 'opponent') {\n  mentionAlerts.push({\n    campaign_id: entity.campaign_id,\n    entity_id: entity.id,\n    type: 'opponent_mention',\n    title: `Adversário Citado: ${entity.name}`,\n    description: `Adversário ${entity.name} foi citado diretamente em: \"${mention.title}\"`,\n    severity: 'medium',\n    source_url: mention.url,\n    metadata: JSON.stringify({ sentiment: analysis.sentiment, impact_score: analysis.impact_score }),\n    created_at: now,\n    read: false\n  });\n}\n\n// Regra 5: Criticidade crítica pela IA\nif (analysis.criticidade === 'critical') {\n  const exists = mentionAlerts.find(a => a.type === 'negative_sentiment');\n  if (!exists) {\n    mentionAlerts.push({\n      campaign_id: entity.campaign_id,\n      entity_id: entity.id,\n      type: 'critical_coverage',\n      title: `Cobertura Crítica: ${entity.name}`,\n      description: `IA classificou como CRÍTICO: \"${mention.title}\" - ${analysis.justificativa}`,\n      severity: 'critical',\n      source_url: mention.url,\n      metadata: JSON.stringify({ justificativa: analysis.justificativa, temas: analysis.principais_temas }),\n      created_at: now,\n      read: false\n    });\n  }\n}\n\nconsole.log('[NEXO News] Alertas gerados para ' + entity.name + ': ' + mentionAlerts.length);\nalerts.push(...mentionAlerts);\n}\nreturn alerts.map(a => ({ json: a }));"
+      },
+      "id": "check-alerts",
+      "name": "Verificar Condições de Alerta",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3340, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "loose", "version": 2 },
+          "conditions": [
+            {
+              "id": "cond-has-type",
+              "leftValue": "={{ $json.type }}",
+              "rightValue": "",
+              "operator": { "type": "string", "operation": "notEmpty", "singleValue": true }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "has-alerts",
+      "name": "Tem Alertas?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [3560, 300]
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "tableId": "alerts",
+        "fieldsUi": {
+          "fieldValues": [
+            { "fieldId": "campaign_id", "fieldValue": "={{ $json.campaign_id }}" },
+            { "fieldId": "entity_id", "fieldValue": "={{ $json.entity_id }}" },
+            { "fieldId": "type", "fieldValue": "={{ $json.type }}" },
+            { "fieldId": "title", "fieldValue": "={{ $json.title }}" },
+            { "fieldId": "description", "fieldValue": "={{ $json.description }}" },
+            { "fieldId": "severity", "fieldValue": "={{ $json.severity }}" },
+            { "fieldId": "source_url", "fieldValue": "={{ $json.source_url }}" },
+            { "fieldId": "metadata", "fieldValue": "={{ $json.metadata }}" },
+            { "fieldId": "created_at", "fieldValue": "={{ $json.created_at }}" },
+            { "fieldId": "read", "fieldValue": "={{ $json.read }}" }
+          ]
+        }
+      },
+      "id": "save-alert",
+      "name": "Salvar Alerta no Supabase",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [3780, 200],
+      "credentials": {
+        "supabaseApi": {
+          "id": "supabase-nexo",
+          "name": "Supabase NEXO"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Contabilizar para log final\nconst saved = $input.all();\nconsole.log('[NEXO News] ' + saved.length + ' alertas salvos.');\nreturn saved;"
+      },
+      "id": "log-alerts-saved",
+      "name": "Log Alertas Salvos",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [4000, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Log quando não há artigos para a entidade\nconst entity = $input.first().json;\nconsole.log('[NEXO News] Sem artigos para: ' + entity.name);\nreturn [{ json: { entity_name: entity.name, status: 'no_articles' } }];"
+      },
+      "id": "log-no-articles",
+      "name": "Log Sem Artigos",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2240, 500]
+    },
+    {
+      "parameters": {
+        "jsCode": "const endTime = Date.now();\nconst startTime = Number($execution.customData.get('start_time')) || endTime;\nconst durationMs = endTime - startTime;\nconst durationSec = (durationMs / 1000).toFixed(2);\n\nconsole.log('=== NEXO News Collector - Relatório Final ===');\nconsole.log('Tempo de execução: ' + durationSec + 's');\nconsole.log('Execução concluída em: ' + new Date().toISOString());\n\nreturn [{\n  json: {\n    status: 'completed',\n    execution_time_sec: parseFloat(durationSec),\n    completed_at: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "final-log",
+      "name": "Log Final de Execução",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [4220, 400]
+    },
+    {
+      "parameters": {
+        "errorMessage": "=Erro no NEXO News Collector: {{ $json.error?.message || $json.message || 'Erro desconhecido' }}"
+      },
+      "id": "error-trigger",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [240, 700]
+    },
+    {
+      "parameters": {
+        "jsCode": "const error = $input.first().json;\nconsole.error('[NEXO News] ERRO CRÍTICO:', JSON.stringify(error, null, 2));\n\nconst errorLog = {\n  workflow: 'NEXO - News Collector',\n  error_message: error.error?.message || error.message || 'Erro desconhecido',\n  error_node: error.error?.node?.name || 'unknown',\n  error_stack: error.error?.stack || '',\n  occurred_at: new Date().toISOString()\n};\n\nconsole.log('[NEXO News] Log de erro registrado:', JSON.stringify(errorLog));\nreturn [{ json: errorLog }];"
+      },
+      "id": "handle-error",
+      "name": "Tratar Erro",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 700]
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "tableId": "alerts",
+        "fieldsUi": {
+          "fieldValues": [
+            { "fieldId": "type", "fieldValue": "workflow_error" },
+            { "fieldId": "title", "fieldValue": "Erro no NEXO News Collector" },
+            { "fieldId": "description", "fieldValue": "={{ $json.error_message }}" },
+            { "fieldId": "severity", "fieldValue": "high" },
+            { "fieldId": "metadata", "fieldValue": "={{ JSON.stringify($json) }}" },
+            { "fieldId": "created_at", "fieldValue": "={{ $json.occurred_at }}" },
+            { "fieldId": "read", "fieldValue": "false" }
+          ]
+        }
+      },
+      "id": "save-error-alert",
+      "name": "Salvar Alerta de Erro",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [680, 700],
+      "credentials": {
+        "supabaseApi": {
+          "id": "supabase-nexo",
+          "name": "Supabase NEXO"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Cron 30min": {
+      "main": [[{ "node": "Init Execution", "type": "main", "index": 0 }]]
+    },
+    "Init Execution": {
+      "main": [[{ "node": "Buscar Entidades Ativas", "type": "main", "index": 0 }]]
+    },
+    "Buscar Entidades Ativas": {
+      "main": [[{ "node": "Validar Entidades", "type": "main", "index": 0 }]]
+    },
+    "Validar Entidades": {
+      "main": [[{ "node": "Loop por Entidade", "type": "main", "index": 0 }]]
+    },
+    "Loop por Entidade": {
+      "main": [
+        [],
+        [{ "node": "Construir Query de Pesquisa", "type": "main", "index": 0 }]
+      ]
+    },
+    "Construir Query de Pesquisa": {
+      "main": [
+        [
+          { "node": "Pesquisar Notícias (SerpAPI)", "type": "main", "index": 0 },
+          { "node": "Pesquisar Notícias (NewsAPI)", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Pesquisar Notícias (SerpAPI)": {
+      "main": [[{ "node": "Mesclar Fontes de Notícias", "type": "main", "index": 0 }]],
+      "error": [[{ "node": "Mesclar Fontes de Notícias", "type": "main", "index": 0 }]]
+    },
+    "Pesquisar Notícias (NewsAPI)": {
+      "main": [[{ "node": "Mesclar Fontes de Notícias", "type": "main", "index": 0 }]],
+      "error": [[{ "node": "Mesclar Fontes de Notícias", "type": "main", "index": 0 }]]
+    },
+    "Mesclar Fontes de Notícias": {
+      "main": [[{ "node": "Tem Artigos?", "type": "main", "index": 0 }]]
+    },
+    "Tem Artigos?": {
+      "main": [
+        [{ "node": "Log Sem Artigos", "type": "main", "index": 0 }],
+        [{ "node": "Coletar Conteúdo do Artigo", "type": "main", "index": 0 }]
+      ]
+    },
+    "Coletar Conteúdo do Artigo": {
+      "main": [[{ "node": "Extrair Conteúdo Limpo (FIXED)", "type": "main", "index": 0 }]],
+      "error": [[{ "node": "Extrair Conteúdo Limpo (FIXED)", "type": "main", "index": 0 }]]
+    },
+    "Extrair Conteúdo Limpo (FIXED)": {
+      "main": [[{ "node": "Analisar com IA (OpenRouter)", "type": "main", "index": 0 }]]
+    },
+    "OpenRouter Chat Model": {
+      "ai_languageModel": [[{ "node": "Analisar com IA (OpenRouter)", "type": "ai_languageModel", "index": 0 }]]
+    },
+    "Analisar com IA (OpenRouter)": {
+      "main": [[{ "node": "Construir Mention", "type": "main", "index": 0 }]],
+      "error": [[{ "node": "Construir Mention", "type": "main", "index": 0 }]]
+    },
+    "Construir Mention": {
+      "main": [[{ "node": "Salvar Mention no Supabase", "type": "main", "index": 0 }]]
+    },
+    "Salvar Mention no Supabase": {
+      "main": [[{ "node": "Verificar Condições de Alerta", "type": "main", "index": 0 }]],
+      "error": [[{ "node": "Verificar Condições de Alerta", "type": "main", "index": 0 }]]
+    },
+    "Verificar Condições de Alerta": {
+      "main": [[{ "node": "Tem Alertas?", "type": "main", "index": 0 }]]
+    },
+    "Tem Alertas?": {
+      "main": [
+        [{ "node": "Salvar Alerta no Supabase", "type": "main", "index": 0 }],
+        [{ "node": "Log Final de Execução", "type": "main", "index": 0 }]
+      ]
+    },
+    "Salvar Alerta no Supabase": {
+      "main": [[{ "node": "Log Alertas Salvos", "type": "main", "index": 0 }]],
+      "error": [[{ "node": "Log Final de Execução", "type": "main", "index": 0 }]]
+    },
+    "Log Alertas Salvos": {
+      "main": [[{ "node": "Log Final de Execução", "type": "main", "index": 0 }]]
+    },
+    "Log Sem Artigos": {
+      "main": [[{ "node": "Log Final de Execução", "type": "main", "index": 0 }]]
+    },
+    "Log Final de Execução": {
+      "main": [[{ "node": "Loop por Entidade", "type": "main", "index": 0 }]]
+    },
+    "Error Trigger": {
+      "main": [[{ "node": "Tratar Erro", "type": "main", "index": 0 }]]
+    },
+    "Tratar Erro": {
+      "main": [[{ "node": "Salvar Alerta de Erro", "type": "main", "index": 0 }]]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": "",
+    "saveDataSuccessExecution": "all",
+    "saveDataErrorExecution": "all",
+    "timezone": "America/Sao_Paulo"
+  },
+  "staticData": null,
+  "tags": [
+    { "name": "NEXO" },
+    { "name": "news" },
+    { "name": "monitoring" }
+  ],
+  "triggerCount": 1,
+  "updatedAt": "2026-06-25T00:00:00.000Z",
+  "versionId": "1"
+}

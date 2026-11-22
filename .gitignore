@@ -1,0 +1,20 @@
+# Backups de workflows / arquivos temporários
+*.bak
+*.bak2
+$OUT
+.thumbnail
+
+# Uploads locais (não fazem parte do deploy)
+uploads/
+
+# Dependências / sistema
+node_modules/
+.DS_Store
+Thumbs.db
+
+# Vercel
+.vercel
+*$OUT*
+
+# Configuracao local (URL + publishable key do Supabase)
+frontend/services/config.js

@@ -1,0 +1,1124 @@
+{
+  "name": "NEXO - Intelligence Engine",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 1
+            }
+          ]
+        }
+      },
+      "id": "node-cron",
+      "name": "Cron 1h",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        240,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "  const start = Date.now();\n  $execution.customData.set('engine_start', start);\n  console.log('[NEXO Intelligence] Engine iniciado - ' + new Date().toISOString());\n  return [{ json: { started_at: new Date().toISOString(), ts: start } }];"
+      },
+      "id": "node-init",
+      "name": "Init Engine",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, name, status, candidate_name, client_name, target_region, created_at FROM campaigns WHERE is_active = true ORDER BY created_at DESC",
+        "options": {}
+      },
+      "id": "node-fetch-campaigns",
+      "name": "Buscar Campanhas Ativas",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        640,
+        460
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-nexo",
+          "name": "Postgres NEXO"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "  const campaigns = $input.all();\n  if (!campaigns || campaigns.length === 0) {\n    console.log('[NEXO Intelligence] Nenhuma campanha ativa.');\n    return [];\n  }\n  console.log('[NEXO Intelligence] Campanhas ativas: ' + campaigns.length);\n  $execution.customData.set('total_campaigns', campaigns.length);\n  return campaigns.map(c => ({ json: c.json }));"
+      },
+      "id": "node-validate",
+      "name": "Validar Campanhas",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        840,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "node-loop",
+      "name": "Loop por Campanha",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        1040,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=SELECT m.*, me.name AS entity_name, me.entity_type FROM mentions m LEFT JOIN monitored_entities me ON me.id = m.entity_id WHERE m.campaign_id = '{{ $('Loop por Campanha').item.json.id }}' AND m.created_at >= NOW() - INTERVAL '24 hours' ORDER BY m.created_at DESC LIMIT 500",
+        "options": {}
+      },
+      "id": "node-m24",
+      "name": "Buscar Menções 24h",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1300,
+        200
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-nexo",
+          "name": "Postgres NEXO"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=SELECT m.id, m.entity_id, m.source, m.sentiment, m.created_at, m.metadata, me.name AS entity_name, me.entity_type FROM mentions m LEFT JOIN monitored_entities me ON me.id = m.entity_id WHERE m.campaign_id = '{{ $('Loop por Campanha').item.json.id }}' AND m.created_at >= NOW() - INTERVAL '7 days' ORDER BY m.created_at DESC LIMIT 1500",
+        "options": {}
+      },
+      "id": "node-m7d",
+      "name": "Buscar Menções 7d",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1300,
+        360
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-nexo",
+          "name": "Postgres NEXO"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=SELECT id, type, title, description, severity, created_at FROM alerts WHERE campaign_id = '{{ $('Loop por Campanha').item.json.id }}' AND created_at >= NOW() - INTERVAL '24 hours' ORDER BY created_at DESC LIMIT 50",
+        "options": {}
+      },
+      "id": "node-alerts",
+      "name": "Buscar Alertas 24h",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1300,
+        520
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-nexo",
+          "name": "Postgres NEXO"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=SELECT id, name, entity_type, is_active FROM monitored_entities WHERE campaign_id = '{{ $('Loop por Campanha').item.json.id }}' AND is_active = true ORDER BY entity_type",
+        "options": {}
+      },
+      "id": "node-entities",
+      "name": "Buscar Entidades Monitoradas",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1300,
+        680
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-nexo",
+          "name": "Postgres NEXO"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=SELECT * FROM intelligence_snapshots WHERE campaign_id = '{{ $('Loop por Campanha').item.json.id }}' ORDER BY created_at DESC LIMIT 1",
+        "options": {}
+      },
+      "id": "node-prevsnap",
+      "name": "Buscar Snapshot Anterior",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1300,
+        840
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-nexo",
+          "name": "Postgres NEXO"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "  // === NORMALIZAR === unifica formato das menções (24h e baseline 7d), parseia metadata,\n  // padroniza sentimento e extrai campos derivados. Responsabilidade única.\n  const campaign = $('Loop por Campanha').item.json;\n  const raw24 = $('Buscar Menções 24h').all().map(i => i.json);\n  const raw7d = $('Buscar Menções 7d').all().map(i => i.json);\n  const alerts = $('Buscar Alertas 24h').all().map(i => i.json);\n  const entities = $('Buscar Entidades Monitoradas').all().map(i => i.json);\n  const prevSnap = $('Buscar Snapshot Anterior').all().map(i => i.json);\n  const prev_snapshot = prevSnap.length ? prevSnap[0] : null;\n\n  function parseMeta(m){\n    if (!m) return {};\n    if (typeof m === 'string') { try { return JSON.parse(m); } catch(e){ return {}; } }\n    return m;\n  }\n  function normSent(s){\n    s = (s || 'neutral').toString().toLowerCase();\n    if (s.indexOf('pos') === 0) return 'positive';\n    if (s.indexOf('neg') === 0) return 'negative';\n    return 'neutral';\n  }\n  // Provedores genéricos (nome da API, não do veículo) -> preferimos o domínio da URL.\n  const GENERIC = ['gnews', 'serpapi', 'newsapi', 'google news', 'unknown', ''];\n  function domainOf(url){\n    if (!url) return '';\n    const m = url.toString().match(/^https?:\\/\\/(?:www\\.)?([^\\/]+)/i);\n    return m ? m[1].toLowerCase() : '';\n  }\n  function normalize(m){\n    const meta = parseMeta(m.metadata);\n    const dom = domainOf(m.url);\n    const declared = (meta.source_name || '').toString().trim();\n    const source_name = (GENERIC.indexOf(declared.toLowerCase()) < 0 && declared) ? declared : (dom || m.source || 'unknown');\n    return {\n      id: m.id,\n      entity_id: m.entity_id || null,\n      entity_name: m.entity_name || meta.entity_name || null,\n      entity_type: m.entity_type || meta.entity_type || null,\n      source: (m.source || 'unknown').toString().toLowerCase(),\n      source_name: source_name,\n      domain: dom,\n      title: m.title || '',\n      sentiment: normSent(m.sentiment),\n      url: m.url || '',\n      relevance_score: Number(meta.relevance_score) || 0,\n      impact_score: Number(meta.impact_score) || 0,\n      criticidade: (meta.criticidade || 'low').toString().toLowerCase(),\n      temas: Array.isArray(meta.principais_temas) ? meta.principais_temas : [],\n      mencao_adversario: !!meta.mencao_adversario,\n      summary: meta.summary || '',\n      published_at: m.published_at || m.created_at,\n      created_at: m.created_at\n    };\n  }\n  const mentions = raw24.map(normalize);\n  const mentions7d = raw7d.map(normalize);\n  const no_data = mentions.length === 0;\n  console.log('[NEXO Intelligence] ' + campaign.name + ' | 24h=' + mentions.length + ' 7d=' + mentions7d.length + ' alertas=' + alerts.length);\n  return [{ json: { campaign, mentions, mentions7d, alerts, entities, prev_snapshot, no_data } }];"
+      },
+      "id": "node-normalize",
+      "name": "Normalizar Menções",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1560,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.no_data }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "node-hasdata",
+      "name": "Tem Dados?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "  const d = $input.first().json;\n  console.log('[NEXO Intelligence] Sem dados para: ' + (d.campaign && d.campaign.name));\n  return [{ json: { status: 'skipped', campaign: d.campaign && d.campaign.name } }];"
+      },
+      "id": "node-skip",
+      "name": "Log Sem Dados",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1980,
+        660
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "  // === DEDUPLICAR === remove menções repetidas (url+entity_id) mantendo a mais completa.\n  const d = $input.first().json;\n  function dedupe(list){\n    const map = new Map();\n    const score = x => (x.summary ? 2 : 0) + (x.temas.length ? 1 : 0) + (x.impact_score || 0);\n    for (const m of list){\n      const key = (m.entity_id || '') + '|' + (m.url || m.id);\n      const prev = map.get(key);\n      if (!prev || score(m) > score(prev)) map.set(key, m);\n    }\n    return Array.from(map.values());\n  }\n  const mentions = dedupe(d.mentions);\n  const mentions7d = dedupe(d.mentions7d);\n  console.log('[NEXO Intelligence] Dedupe 24h: ' + d.mentions.length + ' -> ' + mentions.length);\n  return [{ json: Object.assign({}, d, { mentions, mentions7d }) }];"
+      },
+      "id": "node-dedupe",
+      "name": "Deduplicar",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1980,
+        360
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "  // === AGRUPAR / CLUSTERIZAR === agrupa por tema, fonte e entidade (reduz volume ao LLM).\n  const d = $input.first().json;\n  const ms = d.mentions;\n  const themeMap = {};\n  for (const m of ms){\n    for (const t of m.temas){\n      if (!themeMap[t]) themeMap[t] = { tema: t, count: 0, positive: 0, neutral: 0, negative: 0, impact_sum: 0 };\n      themeMap[t].count++; themeMap[t][m.sentiment]++; themeMap[t].impact_sum += m.impact_score;\n    }\n  }\n  const clusters_themes = Object.values(themeMap)\n    .map(t => ({ tema: t.tema, count: t.count, positive: t.positive, neutral: t.neutral, negative: t.negative, avg_impact: t.count ? Number((t.impact_sum / t.count).toFixed(2)) : 0 }))\n    .sort((a, b) => b.count - a.count);\n\n  const srcMap = {};\n  for (const m of ms) srcMap[m.source_name] = (srcMap[m.source_name] || 0) + 1;\n  const clusters_sources = Object.keys(srcMap).map(k => ({ source: k, count: srcMap[k] })).sort((a, b) => b.count - a.count);\n\n  const entMap = {};\n  for (const m of ms){\n    const k = m.entity_id || m.entity_name || 'unknown';\n    if (!entMap[k]) entMap[k] = { entity_id: m.entity_id, entity_name: m.entity_name, entity_type: m.entity_type, count: 0, positive: 0, neutral: 0, negative: 0 };\n    entMap[k].count++; entMap[k][m.sentiment]++;\n  }\n  const clusters_entities = Object.values(entMap).sort((a, b) => b.count - a.count);\n  console.log('[NEXO Intelligence] Clusters: temas=' + clusters_themes.length + ' fontes=' + clusters_sources.length + ' entidades=' + clusters_entities.length);\n  return [{ json: Object.assign({}, d, { clusters_themes, clusters_sources, clusters_entities }) }];"
+      },
+      "id": "node-cluster",
+      "name": "Agrupar / Clusterizar",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2180,
+        360
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "  // === CALCULAR MÉTRICAS (estatística pura, sem IA) ===\n  const d = $input.first().json;\n  const ms = d.mentions;\n  const total = ms.length;\n  const by = s => ms.filter(m => m.sentiment === s).length;\n  const sentiment_count = { positive: by('positive'), neutral: by('neutral'), negative: by('negative') };\n  const ratio = n => total ? Number((n / total * 100).toFixed(1)) : 0;\n  const sentiment_ratio = { positive: ratio(sentiment_count.positive), neutral: ratio(sentiment_count.neutral), negative: ratio(sentiment_count.negative) };\n  const avg = key => total ? Number((ms.reduce((s, m) => s + (m[key] || 0), 0) / total).toFixed(3)) : 0;\n\n  const news = ms.filter(m => m.source === 'news');\n  const social = ms.filter(m => ['facebook', 'instagram', 'twitter', 'social'].indexOf(m.source) >= 0);\n  const distinct_sources = new Set(ms.map(m => m.source_name)).size;\n  const distinct_entities = new Set(ms.map(m => m.entity_id || m.entity_name)).size;\n\n  const NATIONAL = ['g1', 'globo', 'folha', 'estadao', 'estadão', 'uol', 'cnn', 'metropoles', 'metrópoles', 'poder360', 'veja', 'terra', 'r7', 'band', 'valor', 'antagonista'];\n  const isNational = sn => { const s = (sn || '').toLowerCase(); return NATIONAL.some(n => s.indexOf(n) >= 0); };\n  const national_count = new Set(news.filter(m => isNational(m.source_name)).map(m => m.source_name)).size;\n\n  const crit = lvl => ms.filter(m => m.criticidade === lvl).length;\n  const criticidade_count = { low: crit('low'), medium: crit('medium'), high: crit('high'), critical: crit('critical') };\n\n  const adversary = ms.filter(m => m.entity_type === 'opponent');\n  const adversary_negative = adversary.filter(m => m.sentiment === 'negative').length;\n\n  const statistics = {\n    total_mentions: total,\n    sentiment_count, sentiment_ratio,\n    avg_impact: avg('impact_score'), avg_relevance: avg('relevance_score'),\n    news_count: news.length, social_count: social.length,\n    distinct_sources, distinct_entities, national_count,\n    criticidade_count,\n    adversary_count: adversary.length, adversary_negative,\n    positive_high_impact: ms.filter(m => m.sentiment === 'positive' && m.impact_score >= 0.6).length,\n    negative_high_impact: ms.filter(m => m.sentiment === 'negative' && m.impact_score >= 0.6).length\n  };\n  const top_news = news\n    .map(m => ({ title: m.title, source_name: m.source_name, sentiment: m.sentiment, impact_score: m.impact_score, relevance_score: m.relevance_score, url: m.url, entity_name: m.entity_name, published_at: m.published_at, summary: m.summary }))\n    .sort((a, b) => (b.impact_score + b.relevance_score) - (a.impact_score + a.relevance_score))\n    .slice(0, 10);\n  console.log('[NEXO Intelligence] Métricas: total=' + total + ' neg%=' + sentiment_ratio.negative);\n  return [{ json: Object.assign({}, d, { statistics, top_news }) }];"
+      },
+      "id": "node-metrics",
+      "name": "Calcular Métricas",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2380,
+        360
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "  // === CALCULAR TENDÊNCIAS === janela 0-24h vs 24-48h (do baseline 7d) + snapshot anterior.\n  const d = $input.first().json;\n  const now = Date.now();\n  const H = 3600 * 1000;\n  const inWindow = (m, fromH, toH) => { const t = new Date(m.created_at).getTime(); return t >= now - toH * H && t < now - fromH * H; };\n  const cur = d.mentions;\n  const prev = d.mentions7d.filter(m => inWindow(m, 24, 48));\n\n  const sr = list => { const n = list.length; return { n, neg: n ? list.filter(m => m.sentiment === 'negative').length / n : 0, pos: n ? list.filter(m => m.sentiment === 'positive').length / n : 0 }; };\n  const c = sr(cur), p = sr(prev);\n  const pct = (a, b) => b > 0 ? Number((((a - b) / b) * 100).toFixed(1)) : (a > 0 ? 100 : 0);\n  const volume_change_pct = pct(c.n, p.n);\n  const negative_change_pp = Number(((c.neg - p.neg) * 100).toFixed(1));\n  const positive_change_pp = Number(((c.pos - p.pos) * 100).toFixed(1));\n\n  const themeCount = list => { const o = {}; for (const m of list){ for (const t of m.temas){ o[t] = (o[t] || 0) + 1; } } return o; };\n  const curT = themeCount(cur), prevT = themeCount(prev);\n  const tKeys = new Set(Object.keys(curT).concat(Object.keys(prevT)));\n  const tDelta = []; tKeys.forEach(t => tDelta.push({ tema: t, now: curT[t] || 0, prev: prevT[t] || 0, delta: (curT[t] || 0) - (prevT[t] || 0) }));\n  const themes_rising = tDelta.filter(x => x.delta > 0).sort((a, b) => b.delta - a.delta).slice(0, 8);\n  const themes_falling = tDelta.filter(x => x.delta < 0).sort((a, b) => a.delta - b.delta).slice(0, 8);\n\n  const entCount = list => { const o = {}; for (const m of list){ const k = m.entity_name || m.entity_id; if (k) o[k] = (o[k] || 0) + 1; } return o; };\n  const curE = entCount(cur), prevE = entCount(prev);\n  const eKeys = new Set(Object.keys(curE).concat(Object.keys(prevE)));\n  const eDelta = []; eKeys.forEach(k => eDelta.push({ entity: k, now: curE[k] || 0, prev: prevE[k] || 0, delta: (curE[k] || 0) - (prevE[k] || 0) }));\n  const entities_rising = eDelta.filter(x => x.delta > 0).sort((a, b) => b.delta - a.delta).slice(0, 5);\n  const entities_fading = eDelta.filter(x => x.delta < 0).sort((a, b) => a.delta - b.delta).slice(0, 5);\n\n  let sentiment_trend = 'stable';\n  if (negative_change_pp >= 10) sentiment_trend = 'growing_negative';\n  else if (positive_change_pp >= 10) sentiment_trend = 'growing_positive';\n  if (c.neg > 0.5 && negative_change_pp > 0) sentiment_trend = 'critical';\n\n  const has_baseline = prev.length > 0 || !!d.prev_snapshot;\n  const trend_analysis = { has_baseline, window: '24h_vs_prev_24h', volume_change_pct, negative_change_pp, positive_change_pp, sentiment_trend, themes_rising, themes_falling, entities_rising, entities_fading };\n  console.log('[NEXO Intelligence] Tendência: vol=' + volume_change_pct + '% neg=' + negative_change_pp + 'pp trend=' + sentiment_trend);\n  return [{ json: Object.assign({}, d, { trend_analysis }) }];"
+      },
+      "id": "node-trends",
+      "name": "Calcular Tendências",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2580,
+        360
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "  // === STRATEGIC METRICS === 11 indicadores 0-100, determinísticos. Fórmulas documentadas inline.\n  const BENCH_VOLUME = 50;   // menções/24h consideradas \"alto volume\"\n  const BENCH_SOURCES = 10;  // diversidade de fontes\n  const BENCH_NATIONAL = 5;  // portais nacionais distintos\n  const BENCH_ENTITIES = 5;  // dispersão de entidades\n\n  const d = $input.first().json;\n  const s = d.statistics, tr = d.trend_analysis, prev = d.prev_snapshot;\n  const total = s.total_mentions || 0;\n  const clamp = (x, lo, hi) => Math.max(lo === undefined ? 0 : lo, Math.min(hi === undefined ? 1 : hi, x));\n  const pct100 = x => Math.round(clamp(x) * 100);\n\n  const negRatio = total ? s.sentiment_count.negative / total : 0;\n  const posRatio = total ? s.sentiment_count.positive / total : 0;\n  const cw = { low: 0.15, medium: 0.4, high: 0.7, critical: 1 };\n  const cc = s.criticidade_count;\n  const critTotal = cc.low + cc.medium + cc.high + cc.critical;\n  const critSeverity = critTotal ? (cc.low * cw.low + cc.medium * cw.medium + cc.high * cw.high + cc.critical * cw.critical) / critTotal : 0;\n\n  const volumeFactor = clamp(total / BENCH_VOLUME);\n  const sourceDiversity = clamp(s.distinct_sources / BENCH_SOURCES);\n  const nationalFactor = clamp(s.national_count / BENCH_NATIONAL);\n  const entitySpread = clamp(s.distinct_entities / BENCH_ENTITIES);\n  const newsVolumeFactor = clamp(s.news_count / BENCH_VOLUME);\n\n  const adversaryShare = total ? s.adversary_count / total : 0;\n  const adversaryNegRatio = s.adversary_count ? s.adversary_negative / s.adversary_count : 0;\n\n  const volDelta = clamp((tr.volume_change_pct || 0) / 100, -1, 1);\n  const negDeltaPP = (tr.negative_change_pp || 0) / 100;\n  const posDeltaPP = (tr.positive_change_pp || 0) / 100;\n  const topTheme = (d.clusters_themes && d.clusters_themes[0]) ? d.clusters_themes[0].count : 0;\n  const topThemeShare = total ? clamp(topTheme / total) : 0;\n\n  // 1. Risk: negatividade + criticidade + impacto médio\n  const risk_score = pct100(0.5 * negRatio + 0.3 * critSeverity + 0.2 * s.avg_impact);\n  // 2. Crisis: pico agudo negativo de alto impacto + piora recente\n  const crisis_score = pct100(0.4 * (cc.critical / Math.max(total, 1)) + 0.35 * negRatio * s.avg_impact + 0.25 * clamp(negDeltaPP * 2, 0, 1));\n  // 3. Popularity: predominância positiva ponderada por volume\n  const popularity_score = pct100(0.6 * posRatio + 0.2 * (1 - negRatio) + 0.2 * volumeFactor);\n  // 4. Momentum: 50=estável; sobe com volume e sentimento positivo, cai com negativo\n  const momentum_score = pct100(0.5 + 0.5 * clamp((volDelta + posDeltaPP - negDeltaPP) / 2, -1, 1));\n  // 5. Media: intensidade/alcance de imprensa\n  const media_score = pct100(0.4 * newsVolumeFactor + 0.3 * sourceDiversity + 0.3 * nationalFactor);\n  // 6. Opportunity: aberturas favoráveis\n  const opportunity_score = pct100(0.5 * posRatio * Math.max(s.avg_relevance, 0.3) + 0.5 * (s.positive_high_impact / Math.max(total, 1)));\n  // 7. Attack: agressão adversária\n  const attack_score = pct100(0.5 * adversaryShare + 0.5 * adversaryNegRatio);\n  // 8. Narrative: controle narrativo (dominância de tema + alinhamento positivo)\n  const narrative_score = pct100(0.5 * topThemeShare + 0.5 * posRatio);\n  // 9. Trust: reputação (inverso da negatividade ponderada por criticidade)\n  const trust_score = pct100(1 - (0.6 * negRatio + 0.4 * critSeverity));\n  // 10. Influence: alcance (volume + diversidade + dispersão de entidades)\n  const influence_score = pct100(0.4 * volumeFactor + 0.3 * sourceDiversity + 0.3 * entitySpread);\n  // 11. Overall: posição estratégica composta (maior = melhor)\n  const overall_intelligence_score = pct100(\n    0.28 * (1 - risk_score / 100) +\n    0.18 * (popularity_score / 100) +\n    0.14 * (trust_score / 100) +\n    0.12 * (media_score / 100) +\n    0.10 * (opportunity_score / 100) +\n    0.10 * (momentum_score / 100) +\n    0.08 * (1 - attack_score / 100)\n  );\n\n  const strategic_metrics = {\n    risk_score, crisis_score, popularity_score, momentum_score, media_score,\n    opportunity_score, attack_score, narrative_score, trust_score, influence_score,\n    overall_intelligence_score,\n    basis: { total, negRatio: Number(negRatio.toFixed(3)), posRatio: Number(posRatio.toFixed(3)), critSeverity: Number(critSeverity.toFixed(3)), volumeFactor: Number(volumeFactor.toFixed(3)) }\n  };\n  if (prev && typeof prev.overall_score === 'number') strategic_metrics.overall_delta = overall_intelligence_score - prev.overall_score;\n  console.log('[NEXO Intelligence] Scores: risk=' + risk_score + ' crisis=' + crisis_score + ' overall=' + overall_intelligence_score);\n  return [{ json: Object.assign({}, d, { strategic_metrics }) }];"
+      },
+      "id": "node-scores",
+      "name": "Strategic Metrics",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2780,
+        360
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "  // === CONSTRUIR CONTEXTO ESTRATÉGICO === objeto estruturado para o LLM interpretar.\n  const d = $input.first().json;\n  const c = d.campaign;\n  const strategic_context = {\n    campaign_summary: { name: c.name, candidate: c.candidate_name || null, client: c.client_name || null, region: c.target_region || null, period: '24h' },\n    statistics: d.statistics,\n    strategic_metrics: d.strategic_metrics,\n    trend_analysis: d.trend_analysis,\n    top_topics: d.clusters_themes.slice(0, 10),\n    top_sources: d.clusters_sources.slice(0, 8),\n    top_entities: d.clusters_entities.slice(0, 10),\n    top_news: d.top_news.slice(0, 8),\n    recent_alerts: (d.alerts || []).slice(0, 10).map(a => ({ title: a.title, description: a.description, severity: a.severity }))\n  };\n  return [{ json: Object.assign({}, d, { strategic_context }) }];"
+      },
+      "id": "node-context",
+      "name": "Construir Contexto",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2980,
+        360
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "  // === CONSTRUIR PROMPT (enxuto) === o LLM apenas interpreta; nada de cálculo aqui.\n  const d = $input.first().json;\n  const ctx = d.strategic_context;\n  const sm = ctx.strategic_metrics;\n  const lines = [\n    'Você é um Analista Político Estratégico Sênior. Os números abaixo JÁ foram calculados pelo sistema.',\n    'Sua função é INTERPRETAR e produzir inteligência acionável — não recalcule nem invente dados.',\n    '',\n    'CAMPANHA: ' + ctx.campaign_summary.name + ' | Candidato: ' + (ctx.campaign_summary.candidate || 'N/A') + ' | Região: ' + (ctx.campaign_summary.region || 'N/A'),\n    '',\n    'SCORES ESTRATÉGICOS (0-100):',\n    '- Overall: ' + sm.overall_intelligence_score + ' | Risk: ' + sm.risk_score + ' | Crisis: ' + sm.crisis_score + ' | Popularity: ' + sm.popularity_score,\n    '- Momentum: ' + sm.momentum_score + ' | Opportunity: ' + sm.opportunity_score + ' | Attack: ' + sm.attack_score,\n    '- Narrative: ' + sm.narrative_score + ' | Trust: ' + sm.trust_score,\n    '',\n    'ESTATÍSTICAS 24h: total=' + ctx.statistics.total_mentions + ' | pos=' + ctx.statistics.sentiment_ratio.positive + '% neu=' + ctx.statistics.sentiment_ratio.neutral + '% neg=' + ctx.statistics.sentiment_ratio.negative + '%',\n    'TENDÊNCIA: volume ' + ctx.trend_analysis.volume_change_pct + '% | negativo ' + ctx.trend_analysis.negative_change_pp + 'pp | trend=' + ctx.trend_analysis.sentiment_trend + (ctx.trend_analysis.has_baseline ? '' : ' (sem baseline histórico)'),\n    '',\n    'TEMAS EM ALTA: ' + (ctx.trend_analysis.themes_rising.map(t => t.tema + '(+' + t.delta + ')').join(', ') || 'nenhum'),\n    'TEMAS EM QUEDA: ' + (ctx.trend_analysis.themes_falling.map(t => t.tema + '(' + t.delta + ')').join(', ') || 'nenhum'),\n    'TOP TEMAS: ' + (ctx.top_topics.map(t => t.tema + ' (' + t.count + ', neg=' + t.negative + ')').join('; ') || 'nenhum'),\n    'TOP ENTIDADES: ' + (ctx.top_entities.map(e => (e.entity_name || '?') + ' [' + (e.entity_type || '?') + '] ' + e.count + ' (neg=' + e.negative + ')').join('; ') || 'nenhuma'),\n    '',\n    'PRINCIPAIS NOTÍCIAS:',\n    (ctx.top_news.map(n => '- [' + n.sentiment.toUpperCase() + '] ' + n.title + ' | ' + n.source_name + ' | impacto ' + n.impact_score).join('\\n') || 'nenhuma'),\n    '',\n    'ALERTAS RECENTES: ' + ((ctx.recent_alerts || []).map(a => '[' + (a.severity || '').toUpperCase() + '] ' + a.title).join('; ') || 'nenhum'),\n    '',\n    'Retorne APENAS JSON válido (sem markdown) nesta estrutura EXATA:',\n    '{',\n    '  \"summary\": \"resumo executivo 3-5 frases\",',\n    '  \"sentiment_analysis\": { \"overview\": \"\", \"trend\": \"growing_positive|stable|growing_negative|critical\", \"critical_points\": [] },',\n    '  \"themes_rising\": [ { \"theme\": \"\", \"reason\": \"\", \"urgency\": \"low|medium|high|critical\" } ],',\n    '  \"themes_falling\": [ { \"theme\": \"\", \"reason\": \"\" } ],',\n    '  \"risks\": [ { \"risk\": \"\", \"probability\": \"low|medium|high\", \"impact\": \"low|medium|high|critical\", \"mitigation\": \"\" } ],',\n    '  \"opportunities\": [ { \"opportunity\": \"\", \"potential\": \"low|medium|high\", \"action\": \"\" } ],',\n    '  \"adversary_movements\": [ { \"entity\": \"\", \"movement\": \"\", \"threat_level\": \"low|medium|high|critical\" } ],',\n    '  \"narrative_changes\": [ { \"old_narrative\": \"\", \"new_narrative\": \"\", \"implication\": \"\" } ],',\n    '  \"crisis_alerts\": [ { \"description\": \"\", \"severity\": \"low|medium|high|critical\", \"action_required\": \"\", \"deadline_hours\": 24 } ],',\n    '  \"insights\": [ \"\" ],',\n    '  \"recommendations\": [ { \"action\": \"\", \"reason\": \"\", \"urgency\": \"low|medium|high|critical\", \"deadline_hours\": 48 } ],',\n    '  \"agenda_suggestions\": [ { \"title\": \"\", \"reason\": \"\", \"urgency\": \"low|medium|high|critical\", \"engagement_potential\": \"low|medium|high\", \"target_audience\": \"\", \"suggested_narrative\": \"\", \"recommended_tone\": \"\" } ],',\n    '  \"top_entities\": [ { \"name\": \"\", \"type\": \"candidate|opponent|party|influencer|portal\", \"mentions\": 0, \"sentiment_trend\": \"positive|neutral|negative\", \"relevance\": \"high|medium|low\" } ]',\n    '}'\n  ];\n  return [{ json: Object.assign({}, d, { openai_prompt: lines.join('\\n') }) }];"
+      },
+      "id": "node-prompt",
+      "name": "Construir Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3180,
+        360
+      ]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o",
+        "options": {
+          "temperature": 0.2,
+          "maxTokens": 3000,
+          "timeout": 90000
+        },
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "Você é um analista político estratégico sênior. Interprete os indicadores já calculados e retorne SEMPRE JSON válido sem markdown."
+            },
+            {
+              "role": "user",
+              "content": "={{ $json.openai_prompt }}"
+            }
+          ]
+        }
+      },
+      "id": "node-llm",
+      "name": "LLM - Interpretação",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1.3,
+      "position": [
+        3380,
+        360
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "openai-nexo",
+          "name": "OpenAI NEXO"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "  // === INTERPRETAR JSON (parse + repair + fallback determinístico) ===\n  const d = $('Construir Prompt').first().json;\n  const aiItem = $('LLM - Interpretação').first();\n  const raw = aiItem && aiItem.json ? (aiItem.json.text || aiItem.json.output || (aiItem.json.message && aiItem.json.message.content) || (aiItem.json.choices && aiItem.json.choices[0] && aiItem.json.choices[0].message.content) || '') : '';\n\n  function tryParse(txt){\n    if (!txt) return null;\n    let t = txt.replace(/```json/gi, '').replace(/```/g, '').trim();\n    try { return JSON.parse(t); } catch(e){}\n    const i = t.indexOf('{'), j = t.lastIndexOf('}');\n    if (i >= 0 && j > i){ try { return JSON.parse(t.slice(i, j + 1)); } catch(e){} }\n    try { return JSON.parse(t.replace(/,\\s*([}\\]])/g, '$1')); } catch(e){}\n    return null;\n  }\n  const EMPTY = { summary: '', sentiment_analysis: { overview: '', trend: 'stable', critical_points: [] }, themes_rising: [], themes_falling: [], risks: [], opportunities: [], adversary_movements: [], narrative_changes: [], crisis_alerts: [], insights: [], recommendations: [], agenda_suggestions: [], top_entities: [] };\n\n  let parsed = tryParse(raw);\n  const parse_ok = !!parsed;\n  if (!parsed){\n    console.error('[NEXO Intelligence] JSON da IA inválido - fallback determinístico.');\n    const tr = d.trend_analysis, sm = d.strategic_metrics, st = d.statistics;\n    parsed = Object.assign({}, EMPTY, {\n      summary: 'Análise automática indisponível neste ciclo. Síntese determinística: ' + st.total_mentions + ' menções, ' + st.sentiment_ratio.negative + '% negativas, Overall ' + sm.overall_intelligence_score + '/100, Risk ' + sm.risk_score + '/100.',\n      sentiment_analysis: { overview: 'Derivado de métricas.', trend: tr.sentiment_trend, critical_points: [] },\n      themes_rising: tr.themes_rising.map(t => ({ theme: t.tema, reason: 'Crescimento de +' + t.delta + ' menções vs período anterior.', urgency: t.delta >= 5 ? 'high' : 'medium' })),\n      themes_falling: tr.themes_falling.map(t => ({ theme: t.tema, reason: 'Queda de ' + t.delta + ' menções.' })),\n      insights: ['Overall Intelligence Score: ' + sm.overall_intelligence_score + '/100.', 'Risk Score: ' + sm.risk_score + '/100.']\n    });\n  }\n  const intelligence = Object.assign({}, EMPTY, parsed);\n  console.log('[NEXO Intelligence] Parse IA: ' + (parse_ok ? 'OK' : 'FALLBACK'));\n  return [{ json: Object.assign({}, d, { intelligence, parse_ok }) }];"
+      },
+      "id": "node-parse",
+      "name": "Interpretar JSON",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3580,
+        360
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "  // === GERAR RELATÓRIO + ALERTAS DETERMINÍSTICOS + SNAPSHOT ===\n  const d = $input.first().json;\n  const c = d.campaign, ai = d.intelligence, sm = d.strategic_metrics, st = d.statistics, tr = d.trend_analysis;\n  const now = new Date().toISOString();\n  const TH = { risk: 65, crisis: 60, attack: 60, neg_ratio: 0.5, neg_change_pp: 15 };\n\n  // Conteúdo do relatório: CONTRATO preservado + novas seções aditivas\n  const reportContent = {\n    summary: ai.summary,\n    sentiment_analysis: ai.sentiment_analysis,\n    themes_rising: ai.themes_rising,\n    themes_falling: ai.themes_falling,\n    risks: ai.risks,\n    opportunities: ai.opportunities,\n    adversary_movements: ai.adversary_movements,\n    narrative_changes: ai.narrative_changes,\n    crisis_alerts: ai.crisis_alerts,\n    insights: ai.insights,\n    recommendations: ai.recommendations,\n    agenda_suggestions: ai.agenda_suggestions,\n    top_entities: ai.top_entities,\n    strategic_metrics: sm,\n    trend_analysis: tr,\n    data_summary: { total_mentions: st.total_mentions, sentiment_ratio: st.sentiment_ratio, risk_score: sm.risk_score / 100, top_themes: d.clusters_themes.slice(0, 10), top_sources: d.clusters_sources.slice(0, 8), period: '24h' },\n    ai_parse_ok: d.parse_ok,\n    generated_at: now\n  };\n\n  const alerts = [];\n  const push = a => alerts.push({ campaign_id: c.id, entity_id: a.entity_id || null, type: a.type, title: a.title, description: a.description || '', severity: a.severity || 'medium', source_url: a.source_url || null, metadata: JSON.stringify(a.metadata || { source: 'intelligence_engine' }), status: 'open', read: false, created_at: now });\n\n  // Regras determinísticas (independentes da IA)\n  if (sm.risk_score >= TH.risk) push({ type: 'strategic_risk', title: 'Risk Score elevado (' + sm.risk_score + '/100)', description: 'Indicador de risco acima do limite (' + TH.risk + '). Negatividade em ' + st.sentiment_ratio.negative + '%.', severity: sm.risk_score >= 80 ? 'critical' : 'high', metadata: { risk_score: sm.risk_score, source: 'rule' } });\n  if (sm.crisis_score >= TH.crisis) push({ type: 'crisis_detected', title: 'Crisis Score elevado (' + sm.crisis_score + '/100)', description: 'Possível crise: pico negativo de alto impacto detectado.', severity: sm.crisis_score >= 80 ? 'critical' : 'high', metadata: { crisis_score: sm.crisis_score, source: 'rule' } });\n  if (sm.attack_score >= TH.attack) push({ type: 'adversary_movement', title: 'Attack Score elevado (' + sm.attack_score + '/100)', description: 'Atividade adversária acima do limite (' + st.adversary_count + ' menções de adversários, ' + st.adversary_negative + ' negativas).', severity: 'high', metadata: { attack_score: sm.attack_score, source: 'rule' } });\n  const negRatio = st.total_mentions ? st.sentiment_count.negative / st.total_mentions : 0;\n  if (negRatio >= TH.neg_ratio) push({ type: 'sentiment_critical', title: 'Sentimento negativo crítico', description: st.sentiment_ratio.negative + '% das menções negativas nas últimas 24h.', severity: negRatio >= 0.6 ? 'critical' : 'high', metadata: { negative_ratio: Number(negRatio.toFixed(3)), source: 'rule' } });\n  if (tr.has_baseline && tr.negative_change_pp >= TH.neg_change_pp) push({ type: 'negative_trend', title: 'Piora acelerada de sentimento', description: 'Sentimento negativo subiu ' + tr.negative_change_pp + 'pp vs período anterior.', severity: 'high', metadata: { negative_change_pp: tr.negative_change_pp, source: 'rule' } });\n\n  // Complemento da IA\n  (ai.crisis_alerts || []).forEach(x => push({ type: 'crisis_detected', title: 'Crise (IA): ' + (x.description || '').slice(0, 60), description: x.description, severity: x.severity || 'high', metadata: { action_required: x.action_required, deadline_hours: x.deadline_hours, source: 'ai' } }));\n  (ai.risks || []).filter(r => r.impact === 'critical' || r.impact === 'high').forEach(r => push({ type: 'strategic_risk', title: 'Risco (IA): ' + (r.risk || '').slice(0, 60), description: r.risk, severity: r.impact === 'critical' ? 'critical' : 'high', metadata: { probability: r.probability, mitigation: r.mitigation, source: 'ai' } }));\n  (ai.adversary_movements || []).filter(a => a.threat_level === 'high' || a.threat_level === 'critical').forEach(a => push({ type: 'adversary_movement', title: 'Adversário (IA): ' + (a.entity || ''), description: a.movement, severity: a.threat_level === 'critical' ? 'critical' : 'high', metadata: { entity: a.entity, threat_level: a.threat_level, source: 'ai' } }));\n  (ai.themes_rising || []).filter(t => t.urgency === 'high' || t.urgency === 'critical').forEach(t => push({ type: 'theme_emerging', title: 'Tema em alta: ' + (t.theme || ''), description: t.reason, severity: t.urgency, metadata: { theme: t.theme, source: 'ai' } }));\n\n  const seen = new Set();\n  const dedupAlerts = alerts.filter(a => { const k = a.type + '|' + a.title; if (seen.has(k)) return false; seen.add(k); return true; });\n\n  const snapshot = {\n    campaign_id: c.id, period: '24h',\n    total_mentions: st.total_mentions,\n    sentiment_positive: st.sentiment_count.positive, sentiment_neutral: st.sentiment_count.neutral, sentiment_negative: st.sentiment_count.negative,\n    risk_score: sm.risk_score, crisis_score: sm.crisis_score, popularity_score: sm.popularity_score, momentum_score: sm.momentum_score,\n    media_score: sm.media_score, opportunity_score: sm.opportunity_score, attack_score: sm.attack_score, narrative_score: sm.narrative_score,\n    trust_score: sm.trust_score, influence_score: sm.influence_score, overall_score: sm.overall_intelligence_score,\n    metrics: JSON.stringify(sm), top_themes: JSON.stringify(d.clusters_themes.slice(0, 10)), created_at: now\n  };\n\n  console.log('[NEXO Intelligence] ' + c.name + ' | alertas=' + dedupAlerts.length + ' | overall=' + sm.overall_intelligence_score);\n  return [{ json: {\n    campaign: c,\n    report: { campaign_id: c.id, title: 'Relatório de Inteligência - ' + c.name + ' - ' + new Date().toLocaleDateString('pt-BR'), report_type: 'intelligence_daily', content: JSON.stringify(reportContent) },\n    alerts_to_create: dedupAlerts,\n    snapshot,\n    strategic_metrics: sm,\n    statistics: st\n  } }];"
+      },
+      "id": "node-buildreport",
+      "name": "Gerar Relatório e Alertas",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3780,
+        360
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "schema": {
+          "__rl": true,
+          "mode": "list",
+          "value": "public"
+        },
+        "table": {
+          "__rl": true,
+          "mode": "list",
+          "value": "reports"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "campaign_id": "={{ $json.report.campaign_id }}",
+            "title": "={{ $json.report.title }}",
+            "report_type": "={{ $json.report.report_type }}",
+            "content": "={{ $json.report.content }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "node-save-report",
+      "name": "Salvar Relatório",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        4000,
+        240
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-nexo",
+          "name": "Postgres NEXO"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "schema": {
+          "__rl": true,
+          "mode": "list",
+          "value": "public"
+        },
+        "table": {
+          "__rl": true,
+          "mode": "list",
+          "value": "intelligence_snapshots"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "campaign_id": "={{ $('Gerar Relatório e Alertas').first().json.snapshot.campaign_id }}",
+            "period": "={{ $('Gerar Relatório e Alertas').first().json.snapshot.period }}",
+            "total_mentions": "={{ $('Gerar Relatório e Alertas').first().json.snapshot.total_mentions }}",
+            "sentiment_positive": "={{ $('Gerar Relatório e Alertas').first().json.snapshot.sentiment_positive }}",
+            "sentiment_neutral": "={{ $('Gerar Relatório e Alertas').first().json.snapshot.sentiment_neutral }}",
+            "sentiment_negative": "={{ $('Gerar Relatório e Alertas').first().json.snapshot.sentiment_negative }}",
+            "risk_score": "={{ $('Gerar Relatório e Alertas').first().json.snapshot.risk_score }}",
+            "crisis_score": "={{ $('Gerar Relatório e Alertas').first().json.snapshot.crisis_score }}",
+            "popularity_score": "={{ $('Gerar Relatório e Alertas').first().json.snapshot.popularity_score }}",
+            "momentum_score": "={{ $('Gerar Relatório e Alertas').first().json.snapshot.momentum_score }}",
+            "media_score": "={{ $('Gerar Relatório e Alertas').first().json.snapshot.media_score }}",
+            "opportunity_score": "={{ $('Gerar Relatório e Alertas').first().json.snapshot.opportunity_score }}",
+            "attack_score": "={{ $('Gerar Relatório e Alertas').first().json.snapshot.attack_score }}",
+            "narrative_score": "={{ $('Gerar Relatório e Alertas').first().json.snapshot.narrative_score }}",
+            "trust_score": "={{ $('Gerar Relatório e Alertas').first().json.snapshot.trust_score }}",
+            "influence_score": "={{ $('Gerar Relatório e Alertas').first().json.snapshot.influence_score }}",
+            "overall_score": "={{ $('Gerar Relatório e Alertas').first().json.snapshot.overall_score }}",
+            "metrics": "={{ $('Gerar Relatório e Alertas').first().json.snapshot.metrics }}",
+            "top_themes": "={{ $('Gerar Relatório e Alertas').first().json.snapshot.top_themes }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "node-save-snapshot",
+      "name": "Salvar Snapshot",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        4000,
+        420
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-nexo",
+          "name": "Postgres NEXO"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "  const item = $('Gerar Relatório e Alertas').first().json;\n  const alerts = item.alerts_to_create || [];\n  if (alerts.length === 0) return [];\n  return alerts.map(a => ({ json: a }));"
+      },
+      "id": "node-prepare-alerts",
+      "name": "Preparar Alertas",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4220,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.type }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "isNotEmpty"
+              }
+            }
+          ]
+        }
+      },
+      "id": "node-hasalerts",
+      "name": "Tem Alertas?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        4420,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "schema": {
+          "__rl": true,
+          "mode": "list",
+          "value": "public"
+        },
+        "table": {
+          "__rl": true,
+          "mode": "list",
+          "value": "alerts"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "campaign_id": "={{ $json.campaign_id }}",
+            "entity_id": "={{ $json.entity_id }}",
+            "type": "={{ $json.type }}",
+            "title": "={{ $json.title }}",
+            "description": "={{ $json.description }}",
+            "severity": "={{ $json.severity }}",
+            "source_url": "={{ $json.source_url }}",
+            "metadata": "={{ $json.metadata }}",
+            "status": "={{ $json.status }}",
+            "read": "={{ $json.read }}",
+            "created_at": "={{ $json.created_at }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "node-save-alert",
+      "name": "Salvar Alerta",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        4620,
+        320
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-nexo",
+          "name": "Postgres NEXO"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "  const it = $('Gerar Relatório e Alertas').first().json;\n  const sm = it.strategic_metrics || {}, st = it.statistics || {};\n  console.log('=== [NEXO Intelligence] ' + it.campaign.name + ' === menções=' + (st.total_mentions || 0) + ' alertas=' + ((it.alerts_to_create || []).length) + ' overall=' + (sm.overall_intelligence_score || 0));\n  return [{ json: { campaign_id: it.campaign.id, campaign_name: it.campaign.name, total_mentions: st.total_mentions || 0, alerts_created: (it.alerts_to_create || []).length, overall_score: sm.overall_intelligence_score || 0, status: 'completed', completed_at: new Date().toISOString() } }];"
+      },
+      "id": "node-log-campaign",
+      "name": "Log Campanha Processada",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4220,
+        600
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "  const endTime = Date.now();\n  const startTime = $execution.customData.get('engine_start') || endTime;\n  const durationSec = ((endTime - startTime) / 1000).toFixed(2);\n  console.log('=== [NEXO Intelligence] Finalizado em ' + durationSec + 's ===');\n  return [{ json: { status: 'engine_completed', execution_time_sec: parseFloat(durationSec), finished_at: new Date().toISOString() } }];"
+      },
+      "id": "node-final",
+      "name": "Log Final Engine",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1300,
+        1020
+      ]
+    },
+    {
+      "parameters": {
+        "errorMessage": "=Erro no NEXO Intelligence Engine: {{ $json.error?.message || $json.message || 'Erro desconhecido' }}"
+      },
+      "id": "node-error-trigger",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        240,
+        1180
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "  const error = $input.first().json;\n  console.error('[NEXO Intelligence] ERRO CRÍTICO:', JSON.stringify(error));\n  return [{ json: {\n    workflow: 'NEXO - Intelligence Engine',\n    error_message: (error.error && error.error.message) || error.message || 'Erro desconhecido',\n    error_node: (error.error && error.error.node && error.error.node.name) || 'unknown',\n    occurred_at: new Date().toISOString()\n  } }];"
+      },
+      "id": "node-handle-error",
+      "name": "Tratar Erro",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        1180
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "schema": {
+          "__rl": true,
+          "mode": "list",
+          "value": "public"
+        },
+        "table": {
+          "__rl": true,
+          "mode": "list",
+          "value": "alerts"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "type": "workflow_error",
+            "title": "Erro no NEXO Intelligence Engine",
+            "description": "={{ $json.error_message }}",
+            "severity": "high",
+            "metadata": "={{ JSON.stringify($json) }}",
+            "status": "open",
+            "read": "false",
+            "created_at": "={{ $json.occurred_at }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "node-save-error",
+      "name": "Salvar Alerta de Erro",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        640,
+        1180
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-nexo",
+          "name": "Postgres NEXO"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "mode": "append",
+        "numberInputs": 5,
+        "options": {}
+      },
+      "id": "node-merge-dados",
+      "name": "Combinar Dados",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.1,
+      "position": [
+        1440,
+        460
+      ]
+    }
+  ],
+  "connections": {
+    "Cron 1h": {
+      "main": [
+        [
+          {
+            "node": "Init Engine",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Init Engine": {
+      "main": [
+        [
+          {
+            "node": "Buscar Campanhas Ativas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Buscar Campanhas Ativas": {
+      "main": [
+        [
+          {
+            "node": "Validar Campanhas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validar Campanhas": {
+      "main": [
+        [
+          {
+            "node": "Loop por Campanha",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop por Campanha": {
+      "main": [
+        [
+          {
+            "node": "Log Final Engine",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Buscar Menções 24h",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Buscar Menções 7d",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Buscar Alertas 24h",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Buscar Entidades Monitoradas",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Buscar Snapshot Anterior",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Buscar Menções 24h": {
+      "main": [
+        [
+          {
+            "node": "Combinar Dados",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Buscar Menções 7d": {
+      "main": [
+        [
+          {
+            "node": "Combinar Dados",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Buscar Alertas 24h": {
+      "main": [
+        [
+          {
+            "node": "Combinar Dados",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Buscar Entidades Monitoradas": {
+      "main": [
+        [
+          {
+            "node": "Combinar Dados",
+            "type": "main",
+            "index": 3
+          }
+        ]
+      ]
+    },
+    "Buscar Snapshot Anterior": {
+      "main": [
+        [
+          {
+            "node": "Combinar Dados",
+            "type": "main",
+            "index": 4
+          }
+        ]
+      ]
+    },
+    "Normalizar Menções": {
+      "main": [
+        [
+          {
+            "node": "Tem Dados?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tem Dados?": {
+      "main": [
+        [
+          {
+            "node": "Log Sem Dados",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Deduplicar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Sem Dados": {
+      "main": [
+        [
+          {
+            "node": "Loop por Campanha",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Deduplicar": {
+      "main": [
+        [
+          {
+            "node": "Agrupar / Clusterizar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Agrupar / Clusterizar": {
+      "main": [
+        [
+          {
+            "node": "Calcular Métricas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calcular Métricas": {
+      "main": [
+        [
+          {
+            "node": "Calcular Tendências",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calcular Tendências": {
+      "main": [
+        [
+          {
+            "node": "Strategic Metrics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Strategic Metrics": {
+      "main": [
+        [
+          {
+            "node": "Construir Contexto",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Construir Contexto": {
+      "main": [
+        [
+          {
+            "node": "Construir Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Construir Prompt": {
+      "main": [
+        [
+          {
+            "node": "LLM - Interpretação",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LLM - Interpretação": {
+      "main": [
+        [
+          {
+            "node": "Interpretar JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ],
+      "error": [
+        [
+          {
+            "node": "Interpretar JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Interpretar JSON": {
+      "main": [
+        [
+          {
+            "node": "Gerar Relatório e Alertas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gerar Relatório e Alertas": {
+      "main": [
+        [
+          {
+            "node": "Salvar Relatório",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Log Campanha Processada",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Salvar Relatório": {
+      "main": [
+        [
+          {
+            "node": "Salvar Snapshot",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ],
+      "error": [
+        [
+          {
+            "node": "Salvar Snapshot",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Salvar Snapshot": {
+      "main": [
+        [
+          {
+            "node": "Preparar Alertas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ],
+      "error": [
+        [
+          {
+            "node": "Preparar Alertas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Alertas": {
+      "main": [
+        [
+          {
+            "node": "Tem Alertas?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tem Alertas?": {
+      "main": [
+        [
+          {
+            "node": "Salvar Alerta",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Log Campanha Processada": {
+      "main": [
+        [
+          {
+            "node": "Loop por Campanha",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Tratar Erro",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tratar Erro": {
+      "main": [
+        [
+          {
+            "node": "Salvar Alerta de Erro",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Combinar Dados": {
+      "main": [
+        [
+          {
+            "node": "Normalizar Menções",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "saveDataSuccessExecution": "all",
+    "saveDataErrorExecution": "all",
+    "timezone": "America/Sao_Paulo"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "NEXO"
+    },
+    {
+      "name": "intelligence"
+    },
+    {
+      "name": "strategic"
+    }
+  ],
+  "triggerCount": 1,
+  "updatedAt": "2026-06-29T03:57:10.852Z",
+  "versionId": "2"
+}

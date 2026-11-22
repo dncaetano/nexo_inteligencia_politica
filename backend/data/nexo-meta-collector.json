@@ -1,0 +1,1025 @@
+{
+  "name": "NEXO - Meta Collector",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 15
+            }
+          ]
+        }
+      },
+      "id": "cron-trigger",
+      "name": "Cron 15min",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/rpc/log_execution",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_KEY }}"
+            },
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.SUPABASE_SERVICE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "p_level",
+              "value": "info"
+            },
+            {
+              "name": "p_message",
+              "value": "NEXO Meta Collector - Início da execução"
+            },
+            {
+              "name": "p_metadata",
+              "value": "={\"timestamp\": \"{{ $now.toISO() }}\", \"workflow\": \"NEXO - Meta Collector\"}"
+            }
+          ]
+        }
+      },
+      "id": "log-start",
+      "name": "Log Início",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [460, 300],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/campaigns",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_KEY }}"
+            },
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.SUPABASE_SERVICE_KEY }}"
+            }
+          ]
+        },
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "status",
+              "value": "eq.active"
+            },
+            {
+              "name": "select",
+              "value": "id,name,user_id,settings,created_at"
+            }
+          ]
+        }
+      },
+      "id": "get-campaigns",
+      "name": "Buscar Campanhas Ativas",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [680, 300],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "=",
+        "options": {}
+      },
+      "id": "split-campaigns",
+      "name": "Loop Campanhas",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/integrations",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_KEY }}"
+            },
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.SUPABASE_SERVICE_KEY }}"
+            }
+          ]
+        },
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "user_id",
+              "value": "=eq.{{ $json.user_id }}"
+            },
+            {
+              "name": "platform",
+              "value": "eq.meta"
+            },
+            {
+              "name": "status",
+              "value": "eq.active"
+            },
+            {
+              "name": "select",
+              "value": "id,access_token,page_id,platform,status,user_id"
+            },
+            {
+              "name": "limit",
+              "value": "1"
+            }
+          ]
+        }
+      },
+      "id": "get-integration",
+      "name": "Verificar Integração Meta",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1120, 300],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "check-integration",
+              "leftValue": "={{ $json.length }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-integration-exists",
+      "name": "Integração Existe?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1340, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/rpc/log_execution",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_KEY }}"
+            },
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.SUPABASE_SERVICE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "p_level",
+              "value": "warn"
+            },
+            {
+              "name": "p_message",
+              "value": "=Campanha sem integração Meta ativa: {{ $('Loop Campanhas').item.json.name }}"
+            },
+            {
+              "name": "p_metadata",
+              "value": "={\"campaign_id\": \"{{ $('Loop Campanhas').item.json.id }}\", \"campaign_name\": \"{{ $('Loop Campanhas').item.json.name }}\"}"
+            }
+          ]
+        }
+      },
+      "id": "log-no-integration",
+      "name": "Log Sem Integração",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1560, 480],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "url": "=https://graph.facebook.com/v19.0/{{ $json[0].page_id }}/posts",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": false,
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "fields",
+              "value": "id,message,created_time,permalink_url,reactions.summary(true),comments.summary(true)"
+            },
+            {
+              "name": "limit",
+              "value": "25"
+            },
+            {
+              "name": "access_token",
+              "value": "={{ $json[0].access_token }}"
+            }
+          ]
+        }
+      },
+      "id": "get-page-posts",
+      "name": "Buscar Posts da Página",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1560, 200],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "data",
+        "options": {}
+      },
+      "id": "split-posts",
+      "name": "Loop Posts",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [1780, 200]
+    },
+    {
+      "parameters": {
+        "url": "=https://graph.facebook.com/v19.0/{{ $json.id }}/comments",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "fields",
+              "value": "id,message,created_time,from,like_count"
+            },
+            {
+              "name": "limit",
+              "value": "100"
+            },
+            {
+              "name": "access_token",
+              "value": "={{ $('Verificar Integração Meta').item.json[0].access_token }}"
+            }
+          ]
+        }
+      },
+      "id": "get-comments",
+      "name": "Buscar Comentários do Post",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2000, 200],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "data",
+        "options": {}
+      },
+      "id": "split-comments",
+      "name": "Loop Comentários",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [2220, 200]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o-mini",
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "Você é um analisador de sentimento especializado em comentários de redes sociais em português e inglês. Classifique o sentimento do comentário fornecido. Retorne APENAS um JSON válido com os campos: sentiment (positive, neutral ou negative), sentiment_score (número de 0 a 1 indicando a intensidade), justification (texto curto explicando a classificação)."
+            },
+            {
+              "role": "user",
+              "content": "=Analise o sentimento deste comentário: \"{{ $json.message }}\""
+            }
+          ]
+        },
+        "options": {
+          "temperature": 0.1,
+          "maxTokens": 200
+        }
+      },
+      "id": "sentiment-analysis",
+      "name": "Análise de Sentimento",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.4,
+      "position": [2440, 200],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const comment = $('Loop Comentários').item.json;\nconst post = $('Loop Posts').item.json;\nconst campaign = $('Loop Campanhas').item.json;\nconst integration = $('Verificar Integração Meta').item.json[0];\n\nlet sentiment = 'neutral';\nlet sentiment_score = 0.5;\nlet justification = 'Análise não disponível';\n\ntry {\n  const openAiResponse = $input.item.json;\n  const content = openAiResponse?.choices?.[0]?.message?.content || openAiResponse?.message?.content || '';\n  if (content) {\n    const parsed = JSON.parse(content);\n    sentiment = parsed.sentiment || 'neutral';\n    sentiment_score = parsed.sentiment_score || 0.5;\n    justification = parsed.justification || '';\n  }\n} catch (e) {\n  // mantém defaults\n}\n\nconst metadata = {\n  post_id: post.id,\n  comment_id: comment.id,\n  author: comment.from?.name || 'unknown',\n  author_id: comment.from?.id || '',\n  reactions: post.reactions?.summary?.total_count || 0,\n  comments: post.comments?.summary?.total_count || 0,\n  like_count: comment.like_count || 0,\n  page_id: integration.page_id,\n  sentiment_justification: justification\n};\n\nreturn {\n  campaign_id: campaign.id,\n  source: 'meta',\n  entity_id: comment.id,\n  title: `Comentário de ${comment.from?.name || 'usuário'} em post do Facebook`,\n  content: comment.message || '',\n  sentiment: sentiment,\n  sentiment_score: sentiment_score,\n  url: post.permalink_url || '',\n  published_at: comment.created_time || new Date().toISOString(),\n  created_at: new Date().toISOString(),\n  metadata: metadata\n};"
+      },
+      "id": "prepare-mention",
+      "name": "Preparar Dados Mention",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2660, 200]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/mentions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_KEY }}"
+            },
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.SUPABASE_SERVICE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "resolution=ignore-duplicates"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}"
+      },
+      "id": "save-mention",
+      "name": "Salvar Mention",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2880, 200],
+      "continueOnFail": true,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "multiplex",
+        "options": {}
+      },
+      "id": "aggregate-comments",
+      "name": "Agregar Comentários",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [3100, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst campaign = $('Loop Campanhas').item.json;\n\nconst totalComments = items.length;\nconst negativeComments = items.filter(i => i.json.sentiment === 'negative').length;\nconst positiveComments = items.filter(i => i.json.sentiment === 'positive').length;\nconst neutralComments = items.filter(i => i.json.sentiment === 'neutral').length;\n\nconst negativeRatio = totalComments > 0 ? negativeComments / totalComments : 0;\n\nconst alerts = [];\n\nif (negativeComments > 20) {\n  alerts.push({\n    campaign_id: campaign.id,\n    title: 'Alto volume de comentários negativos',\n    description: `${negativeComments} comentários negativos detectados nesta execução para a campanha \"${campaign.name}\"`,\n    severity: 'high',\n    status: 'open'\n  });\n}\n\nif (negativeRatio > 0.7 && totalComments >= 5) {\n  alerts.push({\n    campaign_id: campaign.id,\n    title: 'Sentimento negativo predominante',\n    description: `${Math.round(negativeRatio * 100)}% dos comentários são negativos na campanha \"${campaign.name}\"`,\n    severity: 'critical',\n    status: 'open'\n  });\n}\n\nconst postCommentCounts = {};\nitems.forEach(i => {\n  const postId = i.json.metadata?.post_id;\n  if (postId) {\n    postCommentCounts[postId] = (postCommentCounts[postId] || 0) + 1;\n  }\n});\n\nObject.entries(postCommentCounts).forEach(([postId, count]) => {\n  if (count > 50) {\n    alerts.push({\n      campaign_id: campaign.id,\n      title: 'Pico de comentários em post',\n      description: `Post ${postId} recebeu ${count} comentários nesta execução na campanha \"${campaign.name}\"`,\n      severity: 'medium',\n      status: 'open'\n    });\n  }\n});\n\nreturn {\n  campaign_id: campaign.id,\n  campaign_name: campaign.name,\n  total_comments: totalComments,\n  negative_comments: negativeComments,\n  positive_comments: positiveComments,\n  neutral_comments: neutralComments,\n  negative_ratio: negativeRatio,\n  alerts: alerts,\n  has_alerts: alerts.length > 0\n};"
+      },
+      "id": "analyze-alerts",
+      "name": "Analisar Alertas",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3320, 200]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "has-alerts",
+              "leftValue": "={{ $json.has_alerts }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-alerts",
+      "name": "Tem Alertas?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [3540, 200]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/alerts",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_KEY }}"
+            },
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.SUPABASE_SERVICE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=minimal"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.alerts) }}"
+      },
+      "id": "save-alerts",
+      "name": "Salvar Alertas",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [3760, 120],
+      "continueOnFail": true,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/rpc/log_execution",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_KEY }}"
+            },
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.SUPABASE_SERVICE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "p_level",
+              "value": "info"
+            },
+            {
+              "name": "p_message",
+              "value": "=Campanha processada: {{ $('Analisar Alertas').item.json.campaign_name }}"
+            },
+            {
+              "name": "p_metadata",
+              "value": "={\"campaign_id\": \"{{ $('Analisar Alertas').item.json.campaign_id }}\", \"total_comments\": {{ $('Analisar Alertas').item.json.total_comments }}, \"negative_comments\": {{ $('Analisar Alertas').item.json.negative_comments }}, \"positive_comments\": {{ $('Analisar Alertas').item.json.positive_comments }}, \"alerts_generated\": {{ $('Analisar Alertas').item.json.alerts.length }}}"
+            }
+          ]
+        }
+      },
+      "id": "log-campaign-processed",
+      "name": "Log Campanha Processada",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [3760, 300],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/rpc/log_execution",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_KEY }}"
+            },
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.SUPABASE_SERVICE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "p_level",
+              "value": "info"
+            },
+            {
+              "name": "p_message",
+              "value": "NEXO Meta Collector - Execução concluída"
+            },
+            {
+              "name": "p_metadata",
+              "value": "={\"timestamp\": \"{{ $now.toISO() }}\", \"workflow\": \"NEXO - Meta Collector\", \"status\": \"success\"}"
+            }
+          ]
+        }
+      },
+      "id": "log-end",
+      "name": "Log Fim",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [3980, 300],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {},
+      "id": "error-trigger",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [240, 600]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/rpc/log_execution",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_KEY }}"
+            },
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.SUPABASE_SERVICE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "p_level",
+              "value": "error"
+            },
+            {
+              "name": "p_message",
+              "value": "=NEXO Meta Collector - Erro: {{ $json.error.message }}"
+            },
+            {
+              "name": "p_metadata",
+              "value": "={\"error\": \"{{ $json.error.message }}\", \"node\": \"{{ $json.execution.lastNodeExecuted }}\", \"workflow_id\": \"{{ $json.workflow.id }}\", \"timestamp\": \"{{ $now.toISO() }}\"}"
+            }
+          ]
+        }
+      },
+      "id": "log-error",
+      "name": "Log Erro",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [460, 600],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/alerts",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_KEY }}"
+            },
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.SUPABASE_SERVICE_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"title\": \"Erro no coletor Meta\", \"description\": \"{{ $json.error.message }}\", \"severity\": \"critical\", \"status\": \"open\", \"campaign_id\": null}"
+      },
+      "id": "save-error-alert",
+      "name": "Salvar Alerta de Erro",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [680, 600],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/monitored_entities",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.SUPABASE_SERVICE_KEY }}"
+            },
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.SUPABASE_SERVICE_KEY }}"
+            }
+          ]
+        },
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "campaign_id",
+              "value": "=eq.{{ $('Loop Campanhas').item.json.id }}"
+            },
+            {
+              "name": "platform",
+              "value": "eq.meta"
+            },
+            {
+              "name": "select",
+              "value": "id,entity_id,entity_type,campaign_id"
+            }
+          ]
+        }
+      },
+      "id": "get-monitored-entities",
+      "name": "Buscar Entidades Monitoradas",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1780, 400],
+      "continueOnFail": true
+    }
+  ],
+  "connections": {
+    "Cron 15min": {
+      "main": [
+        [
+          {
+            "node": "Log Início",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Início": {
+      "main": [
+        [
+          {
+            "node": "Buscar Campanhas Ativas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Buscar Campanhas Ativas": {
+      "main": [
+        [
+          {
+            "node": "Loop Campanhas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Campanhas": {
+      "main": [
+        [
+          {
+            "node": "Verificar Integração Meta",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Fim",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verificar Integração Meta": {
+      "main": [
+        [
+          {
+            "node": "Integração Existe?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Integração Existe?": {
+      "main": [
+        [
+          {
+            "node": "Buscar Posts da Página",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Sem Integração",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Sem Integração": {
+      "main": [
+        [
+          {
+            "node": "Loop Campanhas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Buscar Posts da Página": {
+      "main": [
+        [
+          {
+            "node": "Loop Posts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Posts": {
+      "main": [
+        [
+          {
+            "node": "Buscar Comentários do Post",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Analisar Alertas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Buscar Comentários do Post": {
+      "main": [
+        [
+          {
+            "node": "Loop Comentários",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Comentários": {
+      "main": [
+        [
+          {
+            "node": "Análise de Sentimento",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Loop Posts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Análise de Sentimento": {
+      "main": [
+        [
+          {
+            "node": "Preparar Dados Mention",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Dados Mention": {
+      "main": [
+        [
+          {
+            "node": "Salvar Mention",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Salvar Mention": {
+      "main": [
+        [
+          {
+            "node": "Loop Comentários",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analisar Alertas": {
+      "main": [
+        [
+          {
+            "node": "Tem Alertas?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tem Alertas?": {
+      "main": [
+        [
+          {
+            "node": "Salvar Alertas",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Campanha Processada",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Salvar Alertas": {
+      "main": [
+        [
+          {
+            "node": "Log Campanha Processada",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Campanha Processada": {
+      "main": [
+        [
+          {
+            "node": "Loop Campanhas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Fim": {
+      "main": []
+    },
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Log Erro",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Erro": {
+      "main": [
+        [
+          {
+            "node": "Salvar Alerta de Erro",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": "",
+    "saveDataSuccessExecution": "all",
+    "saveDataErrorExecution": "all",
+    "saveExecutionProgress": true,
+    "timezone": "America/Sao_Paulo"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "createdAt": "2024-01-01T00:00:00.000Z",
+      "updatedAt": "2024-01-01T00:00:00.000Z",
+      "id": "nexo-meta",
+      "name": "NEXO"
+    },
+    {
+      "createdAt": "2024-01-01T00:00:00.000Z",
+      "updatedAt": "2024-01-01T00:00:00.000Z",
+      "id": "meta-collector",
+      "name": "Meta"
+    }
+  ],
+  "triggerCount": 1,
+  "updatedAt": "2024-01-01T00:00:00.000Z",
+  "versionId": "1"
+}

@@ -1,0 +1,752 @@
+{
+  "name": "NEXO - Strategic Assistant",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "nexo-assistant",
+        "responseMode": "responseNode",
+        "options": {
+          "rawBody": false
+        }
+      },
+      "id": "node-webhook-in",
+      "name": "Webhook Entrada",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        240,
+        400
+      ],
+      "webhookId": "nexo-strategic-assistant"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || $input.first().json;\nconst userId = body.user_id || body.userId || null;\nconst campaignId = body.campaign_id || body.campaignId || null;\nconst message = (body.message || body.text || '').trim();\n\nif (!message) {\n  throw new Error('Campo message obrigatório.');\n}\nif (!campaignId) {\n  throw new Error('Campo campaign_id obrigatório.');\n}\n\nconst requestId = 'req_' + Date.now() + '_' + Math.random().toString(36).substring(2, 8);\nconst startedAt = Date.now();\n\nconsole.log('[NEXO Assistant] Request: ' + requestId + ' | User: ' + userId + ' | Campaign: ' + campaignId);\nconsole.log('[NEXO Assistant] Mensagem: ' + message);\n\nreturn [{\n  json: {\n    request_id: requestId,\n    user_id: userId,\n    campaign_id: campaignId,\n    message,\n    started_at: startedAt,\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "node-validate-input",
+      "name": "Validar Entrada",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        460,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o",
+        "options": {
+          "temperature": 0,
+          "maxTokens": 300
+        },
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "Você é um classificador de intenções para um sistema de inteligência política. Analise a mensagem e retorne APENAS um JSON válido, sem markdown. Classifique a intenção principal e extraia parâmetros relevantes.\n\nIntencoes disponíveis:\n- INTELLIGENCE: resumo geral, situação atual, riscos, oportunidades, crises, evolução sentimento, relatório executivo\n- MEDIA: notícias (negativas/positivas/relevantes/recentes), repercussão na imprensa, portais\n- SOCIAL: comentários redes sociais (negativos/positivos), críticas recorrentes, elogios, Facebook, Instagram\n- ADVERSARY: movimentações adversários, crescimento de exposição, ataques, riscos eleitorais\n- CONTENT: criar nota oficial, resposta imprensa, roteiro vídeo, discurso, postagem Instagram, postagem Facebook, legenda, reels\n- STRATEGY: o que fazer hoje, agenda recomendada, temas em alta, oportunidades comunicação, pautas a explorar\n- RADAR: radar temático, boletim do período, panorama do ciclo, share of voice, temas e narrativas\n- GENERAL: qualquer outra dúvida estratégica ou política\n\nRetorne:\n{\n  \"intent\": \"INTELLIGENCE|MEDIA|SOCIAL|ADVERSARY|CONTENT|STRATEGY|RADAR|GENERAL\",\n  \"sub_intent\": \"descrição específica do que foi pedido\",\n  \"sentiment_filter\": \"positive|negative|neutral|all\",\n  \"time_range\": \"24h|48h|7d|30d|all\",\n  \"entity_focus\": \"nome de entidade se mencionada ou null\",\n  \"content_type\": \"tipo de conteúdo se pedido ou null\",\n  \"urgency\": \"low|medium|high\",\n  \"keywords\": [\"palavra1\", \"palavra2\"]\n}"
+            },
+            {
+              "role": "user",
+              "content": "={{ $json.message }}"
+            }
+          ]
+        }
+      },
+      "id": "node-classify-intent",
+      "name": "Classificar Intenção (OpenAI)",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1.3,
+      "position": [
+        680,
+        400
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "openai-nexo",
+          "name": "OpenAI NEXO"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $('Validar Entrada').first().json;\nconst aiItem = $('Classificar Intenção (OpenAI)').first();\n\nlet classification = {\n  intent: 'GENERAL',\n  sub_intent: 'consulta geral',\n  sentiment_filter: 'all',\n  time_range: '24h',\n  entity_focus: null,\n  content_type: null,\n  urgency: 'medium',\n  keywords: []\n};\n\ntry {\n  const raw = aiItem?.json?.message?.content || aiItem?.json?.choices?.[0]?.message?.content || '{}';\n  const cleaned = raw.replace(/```json\\n?/g, '').replace(/```\\n?/g, '').trim();\n  classification = { ...classification, ...JSON.parse(cleaned) };\n} catch(e) {\n  console.log('[NEXO Assistant] Fallback classificação: ' + e.message);\n}\n\n// --- Reforço determinístico da classificação ---\n// O LLM erra entity_focus e time_range com frequência: \"como está o Bruno Teles essa\n// semana?\" voltava como GENERAL/24h e a busca trazia loteria em vez do Bruno Teles.\n// Casar o nome contra a lista monitorada e o período contra o texto é exato.\nconst _norm = s => (s || '').normalize('NFD').replace(/\\p{Diacritic}/gu, '').toLowerCase();\nconst MONITORADOS = ['Ricardo Lima', 'Paulo Ferraz', 'Bruno Teles', 'Helena Braga', 'Jorge Braga', 'Otávio Pires', 'André Moraes', 'Sérgio Antunes', 'Clara Teles', 'Rui Matos', 'Lara Vieira'];\nconst _msg = _norm(input.message || '');\nconst _achado = MONITORADOS.find(n => _msg.includes(_norm(n)));\nif (_achado) {\n  classification.entity_focus = _achado;\n  if (classification.intent === 'GENERAL') classification.intent = 'ADVERSARY';\n}\nif (/semana|7 dias/.test(_msg)) classification.time_range = '7d';\nelse if (/\\bmes\\b|\\bmeses\\b|30 dias/.test(_msg)) classification.time_range = '30d';\n\n// Mapear time_range para SQL interval\nconst intervalMap = { '24h': '24 hours', '48h': '48 hours', '7d': '7 days', '30d': '30 days', 'all': '365 days' };\nconst sqlInterval = intervalMap[classification.time_range] || '24 hours';\n\nconsole.log('[NEXO Assistant] Intenção: ' + classification.intent + ' | Sub: ' + classification.sub_intent);\n\nreturn [{\n  json: {\n    ...input,\n    classification,\n    sql_interval: sqlInterval\n  }\n}];"
+      },
+      "id": "node-parse-intent",
+      "name": "Processar Classificação",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        900,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=SELECT id, name, candidate_name, client_name, target_region, status, created_at FROM campaigns WHERE id = '{{ $json.campaign_id }}' LIMIT 1",
+        "options": {}
+      },
+      "id": "node-fetch-campaign",
+      "name": "Buscar Dados da Campanha",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1120,
+        200
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-nexo",
+          "name": "Postgres NEXO"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=SELECT r.id, r.title, r.report_type, r.content, r.created_at FROM reports r WHERE r.campaign_id = '{{ $('Processar Classificação').item.json.campaign_id }}' ORDER BY r.created_at DESC LIMIT 3",
+        "options": {}
+      },
+      "id": "node-fetch-reports",
+      "name": "Buscar Relatórios de Inteligência",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1120,
+        380
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-nexo",
+          "name": "Postgres NEXO"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=SELECT a.id, a.type, a.title, a.description, a.severity, a.source_url, a.metadata, a.created_at FROM alerts a WHERE a.campaign_id = '{{ $('Processar Classificação').item.json.campaign_id }}' AND a.created_at >= NOW() - INTERVAL '{{ $('Processar Classificação').item.json.sql_interval }}' ORDER BY CASE a.severity WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 ELSE 4 END, a.created_at DESC LIMIT 20",
+        "options": {}
+      },
+      "id": "node-fetch-alerts",
+      "name": "Buscar Alertas Ativos",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1120,
+        560
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-nexo",
+          "name": "Postgres NEXO"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const ctx = $('Processar Classificação').first().json;\nconst intent = ctx.classification.intent;\nconst sentimentFilter = ctx.classification.sentiment_filter;\nconst campaignId = ctx.campaign_id;\nconst interval = ctx.sql_interval;\nconst entityFocus = ctx.classification.entity_focus;\n\nlet sourceFilter = \"AND TRUE\";\nif (intent === 'MEDIA') sourceFilter = \"AND m.source = 'news'\";\nelse if (intent === 'SOCIAL') sourceFilter = \"AND m.source IN ('facebook', 'instagram', 'twitter', 'social')\";\nelse if (intent === 'ADVERSARY') sourceFilter = \"AND me.entity_type = 'opponent'\";\n\nlet sentimentClause = \"AND TRUE\";\nif (sentimentFilter === 'positive') sentimentClause = \"AND m.sentiment = 'positive'\";\nelse if (sentimentFilter === 'negative') sentimentClause = \"AND m.sentiment = 'negative'\";\nelse if (sentimentFilter === 'neutral') sentimentClause = \"AND m.sentiment = 'neutral'\";\n\nlet entityClause = \"AND TRUE\";\nif (entityFocus) entityClause = `AND (me.name ILIKE '%${entityFocus.replace(/'/g, \"''\")}%' OR m.title ILIKE '%${entityFocus.replace(/'/g, \"''\")}%')`;\n\n// RADAR varre o ciclo inteiro: com 30 itens o share of voice não fecha.\nconst limit = intent === 'RADAR' ? 150\n  : (intent === 'INTELLIGENCE' || intent === 'STRATEGY') ? 50 : 30;\n\n// COUNT(*) OVER() é avaliado antes do LIMIT: dá o volume real do período, não\n// o tamanho do lote. No Radar, ordena por relevância — por recência pura o\n// contexto enchia de resultado de loteria.\nconst orderBy = intent === 'RADAR'\n  ? \"ORDER BY (me.entity_type IN ('candidate','opponent')) DESC, (m.metadata->>'relevance_score')::numeric DESC NULLS LAST, m.created_at DESC\"\n  : 'ORDER BY m.created_at DESC';\n\nconst query = `SELECT m.id, m.source, m.title, m.content, m.sentiment, m.url, m.published_at, m.created_at, m.metadata, me.name as entity_name, me.entity_type, COUNT(*) OVER()::int AS total_periodo FROM mentions m LEFT JOIN monitored_entities me ON me.id = m.entity_id WHERE m.campaign_id = '${campaignId}' AND m.created_at >= NOW() - INTERVAL '${interval}' ${sourceFilter} ${sentimentClause} ${entityClause} ${orderBy} LIMIT ${limit}`;\n\nconsole.log('[NEXO Assistant] Query menções: intent=' + intent);\nreturn [{ json: { ...ctx, dynamic_query: query } }];"
+      },
+      "id": "node-build-query",
+      "name": "Construir Query Dinâmica",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        740
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "={{ $json.dynamic_query }}",
+        "options": {}
+      },
+      "id": "node-fetch-mentions",
+      "name": "Buscar Menções Dinâmicas",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1340,
+        740
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-nexo",
+          "name": "Postgres NEXO"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=SELECT id, name, entity_type, is_active FROM monitored_entities WHERE campaign_id = '{{ $('Processar Classificação').item.json.campaign_id }}' AND is_active = true ORDER BY entity_type, name",
+        "options": {}
+      },
+      "id": "node-fetch-entities",
+      "name": "Buscar Entidades",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1340,
+        560
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-nexo",
+          "name": "Postgres NEXO"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Renomear um nó no canvas derrubava o Code inteiro com \"Referenced node\n// doesn't exist\". Aceita os nomes do workflow original e os abreviados; nó\n// ausente vira lista vazia, e só as menções são obrigatórias.\nconst pegar = (...nomes) => {\n  for (const nome of nomes) {\n    try {\n      const r = $(nome).all();\n      if (r && r.length) return r;\n    } catch (e) { /* nó não existe neste workflow */ }\n  }\n  return [];\n};\n\nconst ctx = pegar('Processar Classificação', 'Classificação')[0]?.json || {};\nconst campaignItems = pegar('Buscar Dados da Campanha', 'Buscar Campanha');\nconst reportItems = pegar('Buscar Relatórios de Inteligência', 'Buscar Relatório', 'Buscar Relatórios');\nconst alertItems = pegar('Buscar Alertas Ativos', 'Buscar Alertas');\nconst mentionItems = pegar('Buscar Menções Dinâmicas', 'Buscar Menções');\nconst entityItems = pegar('Buscar Entidades', 'Buscar Entidades Monitoradas');\n\nconst campaign = campaignItems[0]?.json || {};\nconst reports = reportItems.map(i => i.json);\nconst alerts = alertItems.map(i => i.json);\nconst mentions = mentionItems.map(i => i.json);\nconst entities = entityItems.map(i => i.json);\n\n// --- Consolidar sentimento das menções ---\nconst sentCount = { positive: 0, neutral: 0, negative: 0 };\nmentions.forEach(m => { const s = m.sentiment || 'neutral'; sentCount[s] = (sentCount[s] || 0) + 1; });\nconst total = mentions.length;\n\n// --- Parsear ultimo relatório ---\nlet latestReport = null;\nif (reports.length > 0) {\n  try {\n    const r = reports[0];\n    const parsed = typeof r.content === 'string' ? JSON.parse(r.content) : r.content;\n    latestReport = {\n      title: r.title,\n      created_at: r.created_at,\n      summary: parsed.summary || '',\n      risks: parsed.risks || [],\n      opportunities: parsed.opportunities || [],\n      themes_rising: parsed.themes_rising || [],\n      themes_falling: parsed.themes_falling || [],\n      insights: parsed.insights || [],\n      recommendations: parsed.recommendations || [],\n      agenda_suggestions: parsed.agenda_suggestions || [],\n      adversary_movements: parsed.adversary_movements || [],\n      crisis_alerts: parsed.crisis_alerts || [],\n      sentiment_analysis: parsed.sentiment_analysis || {}\n    };\n  } catch(e) {\n    latestReport = { title: reports[0]?.title || '', summary: 'Relatório disponível mas não parseável.', created_at: reports[0]?.created_at };\n  }\n}\n\n// --- Montar bloco de contexto do relatório ---\nlet reportContext = 'Nenhum relatório de inteligência disponível.';\nif (latestReport) {\n  reportContext = `RELATÓRIO: ${latestReport.title} (${latestReport.created_at?.substring(0,16) || ''})\n\nRESUMO EXECUTIVO:\n${latestReport.summary}\n\nTEMAS EM ALTA:\n${latestReport.themes_rising?.map(t => `• ${t.theme}: ${t.reason} [${t.urgency}]`).join('\\n') || 'Nenhum'}\n\nTEMAS EM QUEDA:\n${latestReport.themes_falling?.map(t => `• ${t.theme}: ${t.reason}`).join('\\n') || 'Nenhum'}\n\nRISCOS IDENTIFICADOS:\n${latestReport.risks?.map(r => `• [${r.impact}] ${r.risk} → ${r.mitigation}`).join('\\n') || 'Nenhum'}\n\nOPORTUNIDADES:\n${latestReport.opportunities?.map(o => `• ${o.opportunity} → ${o.action}`).join('\\n') || 'Nenhuma'}\n\nINSIGHTS:\n${latestReport.insights?.join('\\n• ') || 'Nenhum'}\n\nMOVIMENTAÇÕES DE ADVERSÁRIOS:\n${latestReport.adversary_movements?.map(a => `• ${a.entity}: ${a.movement} [ameaça: ${a.threat_level}]`).join('\\n') || 'Nenhuma'}\n\nCRISES POTENCIAIS:\n${latestReport.crisis_alerts?.map(c => `• [${c.severity}] ${c.description} → ${c.action_required}`).join('\\n') || 'Nenhuma'}\n\nRECOMENDAÇÕES:\n${latestReport.recommendations?.map(r => `• [${r.urgency}] ${r.action} (prazo: ${r.deadline_hours}h)`).join('\\n') || 'Nenhuma'}\n\nSUGESTÕES DE PAUTA:\n${latestReport.agenda_suggestions?.map(s => `• ${s.title} | Tom: ${s.recommended_tone} | Público: ${s.target_audience}`).join('\\n') || 'Nenhuma'}`;\n}\n\n// --- Bloco de alertas ---\n// O coletor grava o mesmo alerta várias vezes com justificativas diferentes:\n// sem dedupe, 8 dos 15 slots iam para uma notícia só.\nconst vistosAlerta = new Set();\nconst alertsUnicos = alerts.filter(a => {\n  const k = (a.title || '') + '|' + (a.description || '').slice(0, 80);\n  if (vistosAlerta.has(k)) return false;\n  vistosAlerta.add(k);\n  return true;\n});\n\nconst criticalAlerts = alerts.filter(a => a.severity === 'critical' || a.severity === 'high');\nlet alertsContext = 'Nenhum alerta ativo.';\nif (alertsUnicos.length > 0) {\n  alertsContext = alertsUnicos.slice(0, 15).map(a => `• [${(a.severity||'').toUpperCase()}] ${a.title}: ${a.description}`).join('\\n');\n}\n\n// --- Bloco de menções ---\nlet mentionsContext = 'Nenhuma menção encontrada no período.';\nif (mentions.length > 0) {\n  // O Radar precisa de matéria-prima: com 10 manchetes o modelo tenta\n  // completar as narrativas sozinho.\n  const maxNews = ctx.classification?.intent === 'RADAR' ? 50 : 10;\n  const newsItems = mentions.filter(m => m.source === 'news').slice(0, maxNews);\n  const socialItems = mentions.filter(m => m.source !== 'news').slice(0, 10);\n\n  let blocks = [];\n\n  if (newsItems.length > 0) {\n    blocks.push('NOTÍCIAS:');\n    newsItems.forEach(m => {\n      const meta = typeof m.metadata === 'string' ? (JSON.parse(m.metadata || '{}')) : (m.metadata || {});\n      blocks.push(`• [${(m.sentiment||'neutral').toUpperCase()}] ${m.title} | Fonte: ${meta.source_name || m.source} | Impacto: ${meta.impact_score || 'N/A'} | ${m.published_at?.substring(0,10) || ''} | ${m.url || ''}`);\n      if (meta.summary) blocks.push(`  Resumo: ${meta.summary}`);\n    });\n  }\n\n  if (socialItems.length > 0) {\n    blocks.push('\\nREDES SOCIAIS / COMENTÁRIOS:');\n    socialItems.forEach(m => {\n      const meta = typeof m.metadata === 'string' ? (JSON.parse(m.metadata || '{}')) : (m.metadata || {});\n      blocks.push(`• [${(m.sentiment||'neutral').toUpperCase()}] ${m.title || m.content?.substring(0, 120) || ''} | Plataforma: ${m.source} | Entidade: ${m.entity_name || 'N/A'}`);\n    });\n  }\n\n  mentionsContext = blocks.join('\\n');\n}\n\n// --- Entidades ---\nconst candidateEntity = entities.find(e => e.entity_type === 'candidate');\nconst opponents = entities.filter(e => e.entity_type === 'opponent');\nconst entitiesContext = `Candidato: ${candidateEntity?.name || campaign.candidate_name || 'N/A'}\nAdversários: ${opponents.map(o => o.name).join(', ') || 'Nenhum'}\nTotal monitoradas: ${entities.length}`;\n\nconst igRows = pegar('Buscar Instagram Insights', 'Buscar Instagram').map(i => i.json);\n// --- Bloco de Instagram (insights de conta, coletor Windsor) ---\nlet instagramContext = 'Sem dados de Instagram disponíveis.';\nif (igRows.length) {\n  const latest = igRows[0];\n  const prev = igRows[1];\n  const nf = (v) => Number(v || 0).toLocaleString('pt-BR');\n  const pct = (a, b) => (b && Number(b) > 0) ? Math.round((Number(a) - Number(b)) / Number(b) * 100) : null;\n  const reachDelta = prev ? pct(latest.reach, prev.reach) : null;\n  const engDelta = prev ? pct(latest.accounts_engaged, prev.accounts_engaged) : null;\n  const trend = [...igRows].reverse().map(d => `• ${d.date}: alcance ${nf(d.reach)}, contas engajadas ${nf(d.accounts_engaged)}`).join('\\n');\n  instagramContext = `Conta: @${latest.user_name || 'N/A'}\nSeguidores: ${nf(latest.followers_count)}\nSeguindo: ${nf(latest.follows_count)}\nPublicações: ${nf(latest.media_count)}\nAlcance (último dia — ${latest.date}): ${nf(latest.reach)}${reachDelta != null ? ` (${reachDelta >= 0 ? '+' : ''}${reachDelta}% vs. dia anterior)` : ''}\nContas engajadas (último dia): ${nf(latest.accounts_engaged)}${engDelta != null ? ` (${engDelta >= 0 ? '+' : ''}${engDelta}% vs. dia anterior)` : ''}\n\nTendência (7 dias):\n${trend}`;\n}\n\n// --- AGREGADOS DO RADAR ---\n// Números do Radar Temático saem daqui, calculados em JavaScript. O modelo\n// recebe o bloco pronto e só narra: contagem feita por LLM vira estimativa.\nconst normTema = s => (s || '').normalize('NFD').replace(/\\p{Diacritic}/gu, '').toLowerCase().trim();\nconst temasMap = new Map();\nconst portaisMap = new Map();\nmentions.forEach(m => {\n  const meta = typeof m.metadata === 'string' ? (JSON.parse(m.metadata || '{}')) : (m.metadata || {});\n  (meta.principais_temas || []).forEach(t => {\n    const k = normTema(t);\n    if (!k) return;\n    // Guarda o rótulo da primeira ocorrência: \"Eleições 2026\" e \"eleições 2026\"\n    // são o mesmo tema e precisam somar num item só.\n    const cur = temasMap.get(k) || { label: t, n: 0 };\n    cur.n++;\n    temasMap.set(k, cur);\n  });\n  const portal = meta.source_name || m.source;\n  portaisMap.set(portal, (portaisMap.get(portal) || 0) + 1);\n});\nconst somaTemas = [...temasMap.values()].reduce((a, b) => a + b.n, 0) || 1;\nconst pctSent = k => total ? Math.round((sentCount[k] || 0) / total * 100) : 0;\nconst sovLinhas = [...temasMap.values()].sort((a, b) => b.n - a.n).slice(0, 10)\n  .map(t => `${t.label} — ${Math.round(t.n / somaTemas * 100)}% (${t.n} menções)`).join('\\n') || 'Sem temas classificados no período.';\nconst portalLinhas = [...portaisMap.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10)\n  .map(([p, n]) => `${p}: ${n}`).join('\\n') || 'Nenhum portal no período.';\nconst janelaLabel = { '24 hours': '24 horas', '48 hours': '48 horas', '7 days': '7 dias', '30 days': '30 dias', '365 days': '12 meses' }[ctx.sql_interval] || ctx.sql_interval;\n// total_periodo vem do COUNT(*) OVER(): o volume real, não o do lote.\nconst totalPeriodo = mentions[0]?.total_periodo ?? total;\nconst radarContext = `JANELA ANALISADA: últimas ${janelaLabel}\nMENÇÕES DE IMPRENSA NO PERÍODO: ${totalPeriodo}\nAMOSTRA ANALISADA (base dos temas e portais abaixo): ${total} matérias\nSENTIMENTO POR VOLUME: positivo ${pctSent('positive')}% | neutro ${pctSent('neutral')}% | negativo ${pctSent('negative')}%\n\nSHARE OF VOICE POR TEMA:\n${sovLinhas}\n\nPORTAIS MAIS ATIVOS:\n${portalLinhas}\n\nFONTES DISPONÍVEIS NESTE CICLO: imprensa (news/portal_rss) e Instagram da conta própria.\nNÃO HÁ dados de alcance, engajamento por peça, Facebook, X/Twitter, YouTube, TikTok ou Bluesky.`;\n\n\n// --- Instrução por intenção (usada quando o prompt está num Basic LLM Chain,\n// que não passa pelo nó \"Construir System Prompt\") ---\nconst INSTRUCOES = {\n  RADAR: 'Produza o Radar Temático do período, no formato definido no system. Todo número vem do bloco AGREGADOS: não recalcule nem estime. Não cite alcance, engajamento por peça ou plataformas sem coleta (Facebook, X, YouTube, TikTok, Bluesky). Manchetes e links só da lista NOTÍCIAS.',\n  ADVERSARY: 'Foque no adversário perguntado: movimentação, exposição, ataques e risco eleitoral.',\n  MEDIA: 'Analise a cobertura de imprensa: padrões, portais mais ativos, narrativas dominantes e impacto reputacional.',\n  SOCIAL: 'Analise o que aparece de redes sociais e comentários: críticas recorrentes, elogios e humor do eleitorado.',\n  CONTENT: 'Crie o conteúdo pedido e entregue pronto para uso, sem estrutura analítica em tópicos.',\n  STRATEGY: 'Recomendações acionáveis para hoje: o que fazer, quando e por quê.',\n  INTELLIGENCE: 'Análise de inteligência completa: riscos críticos, crises emergentes e movimentação de adversários.',\n  GENERAL: 'Responda como consultor político sênior, com os dados disponíveis.',\n};\nconst intentAtual = ctx.classification?.intent || 'GENERAL';\nconst instrucao = (INSTRUCOES[intentAtual] || INSTRUCOES.GENERAL)\n  + (intentAtual === 'RADAR' ? '' : '\\nQuando fizer sentido: 1. DIAGNÓSTICO 2. EVIDÊNCIAS 3. RISCOS 4. OPORTUNIDADES 5. RECOMENDAÇÕES (com prazo)');\n\nconsole.log('[NEXO Assistant] Contexto montado | Menções: ' + total + ' | Alertas: ' + alerts.length + ' | Relatórios: ' + reports.length);\n\nreturn [{\n  json: {\n    ...ctx,\n    campaign,\n    classification: ctx.classification,\n    context: {\n      report: reportContext,\n      alerts: alertsContext,\n      mentions: mentionsContext,\n      entities: entitiesContext,\n      instagram: instagramContext,\n      radar: radarContext,\n      stats: {\n        total_mentions: total,\n        sentiment: sentCount,\n        critical_alerts: criticalAlerts.length,\n        has_reports: reports.length > 0\n      }\n    },\n    message: ctx.message || '',\n    candidato: candidateEntity?.name || campaign.candidate_name || 'Ricardo Lima',\n    intent: intentAtual,\n    instrucao,\n    noticias_bloco: mentionsContext,\n    alertas_bloco: alertsContext,\n    relatorio_bloco: reportContext,\n    entidades_bloco: entitiesContext,\n    instagram_bloco: instagramContext,\n    radar_bloco: radarContext\n  }\n}];"
+      },
+      "id": "node-build-context",
+      "name": "Construir Contexto Completo",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1580,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const d = $input.first().json;\nconst campaign = d.campaign || {};\nconst classification = d.classification || {};\nconst ctx = d.context || {};\nconst stats = ctx.stats || {};\n\nconst intentInstructions = {\n  INTELLIGENCE: 'Forneça uma análise de inteligência política completa. Priorize o relatório estratégico mais recente. Destaque riscos críticos, crises emergentes e movimentações de adversários.',\n  MEDIA: 'Analise a cobertura midiática. Identifique padrões nas notícias, portais mais ativos, narrativas dominantes e o impacto na reputação do candidato.',\n  SOCIAL: 'Analise os comentários e interações nas redes sociais. Identifique padrões de crítica, elogios recorrentes, temas que mobilizam e o humor predominante do eleitorado.',\n  ADVERSARY: 'Foque nas movimentações dos adversários. Identifique estratégias, ataques, ganhos de exposição e riscos eleitorais associados.',\n  CONTENT: `Crie o conteúdo solicitado: \"${classification.content_type || classification.sub_intent}\". Baseie-se nos dados disponíveis. O conteúdo deve ser estratégico, coerente com o momento político e pronto para uso imediato.`,\n  STRATEGY: 'Elabore recomendações estratégicas acionáveis para hoje. Baseie-se nos dados disponíveis. Seja específico sobre o que fazer, quando e por quê.',\n  RADAR: `Monte o Radar Temático do período no formato abaixo.\n\nREGRAS INVIOLÁVEIS:\n- Todo número vem do bloco AGREGADOS DO RADAR. Não recalcule, não estime, não arredonde para cima.\n- É proibido citar alcance, engajamento por peça, seguidores ganhos ou qualquer métrica de Facebook, X/Twitter, YouTube, TikTok e Bluesky: não há coleta dessas fontes.\n- Seção sem dado: escreva \"sem coleta neste ciclo\" e siga adiante. Nunca preencha por plausibilidade.\n- Narrativas e manchetes saem exclusivamente das menções listadas, sempre com portal e link reais.\n\nFORMATO:\n*📡 Radar Temático — <candidato> · <janela analisada>*\n\n*Visão geral do período*\n📲 Menções de imprensa: <n>\n\n*Sentimento por volume*\n🟢 Positivo: <x>%\n🟡 Neutro: <y>%\n🔴 Negativo: <z>%\n\n*📊 Temas e Share of Voice*\n<uma linha por tema, como no bloco agregado>\n\n*Narrativas Favoráveis*\n<2 a 4 narrativas; cada uma com o frame entre aspas, o que sustenta o frame e os portais que a carregaram>\n\n*Narrativas Desfavoráveis*\n<mesmo formato>\n\n*🗞️ Imprensa*\n<manchete — portal>\n<url>\n\n*🔭 Olhar para as próximas horas*\n<3 movimentos concretos: o ativo subexplorado, o risco que pode escalar e o fato novo que pede atenção>`,\n  GENERAL: 'Responda à pergunta estratégica com base nos dados disponíveis. Atue como consultor político sênior.'\n};\n\nconst intentGuidance = intentInstructions[classification.intent] || intentInstructions.GENERAL;\n\nconst systemPrompt = `Você é o NEXO Strategic Assistant.\n\nVocê é um consultor político de elite especializado em campanhas eleitorais brasileiras.\nSua missão é transformar dados em decisões estratégicas acionáveis.\nNunca invente dados. Sempre baseie suas respostas nos registros recuperados.\nQuando não houver informação suficiente, deixe isso explícito.\nNunca se identifique como IA genérica. Você é o NEXO.\nTom: profissional, executivo, direto, consultivo.\n\nCAMPANHA ATIVA:\nNome: ${campaign.name || 'N/A'}\nCandidato: ${campaign.candidate_name || 'N/A'}\nRegião: ${campaign.target_region || 'N/A'}\n\nENTIDADES MONITORADAS:\n${ctx.entities || ''}\n\nESTATÍSTICAS DO PERÍODO:\nMenções analisadas: ${stats.total_mentions || 0}\nSentimento positivo: ${stats.sentiment?.positive || 0}\nSentimento neutro: ${stats.sentiment?.neutral || 0}\nSentimento negativo: ${stats.sentiment?.negative || 0}\nAlertas críticos/altos: ${stats.critical_alerts || 0}\nRelatórios disponíveis: ${stats.has_reports ? 'Sim' : 'Não'}\n\n${ctx.report ? '=== INTELIGÊNCIA ESTRATÉGICA (RELATÓRIO MAIS RECENTE) ===\\n' + ctx.report : ''}\n\n=== ALERTAS ATIVOS ===\n${ctx.alerts || 'Nenhum alerta.'}\n\n=== DADOS DE MENÇÕES/NOTÍCIAS ===\n${ctx.mentions || 'Nenhuma menção no período.'}\n\n=== INSTAGRAM (INSIGHTS DA CONTA — FONTE: WINDSOR) ===\n${ctx.instagram || 'Sem dados de Instagram.'}\n\n${classification.intent === 'RADAR' ? '=== AGREGADOS DO RADAR (ÚNICA FONTE DE NÚMEROS) ===' : ''}\n${classification.intent === 'RADAR' ? (ctx.radar || 'Sem agregados.') : ''}\n\n=== INSTRUÇÃO PARA ESTA CONSULTA ===\n${intentGuidance}\n\nEstrutura da resposta quando relevante:\n1. DIAGNÓSTICO — situação atual em 2-3 frases diretas\n2. EVIDÊNCIAS — dados que embasam a análise\n3. RISCOS — o que pode piorar e por quê\n4. OPORTUNIDADES — o que pode ser aproveitado\n5. RECOMENDAÇÕES — ações específicas com prazos\n\nPara criação de conteúdo: entregue o conteúdo completo e pronto para uso, sem estrutura de tópicos analíticos.`;\n\nreturn [{ json: { ...d, system_prompt: systemPrompt } }];"
+      },
+      "id": "node-build-prompt",
+      "name": "Construir System Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1800,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o",
+        "options": {
+          "temperature": 0.3,
+          "maxTokens": 4000,
+          "timeout": 90000
+        },
+        "messages": {
+          "values": [
+            {
+              "role": "system",
+              "content": "={{ $json.system_prompt }}"
+            },
+            {
+              "role": "user",
+              "content": "={{ $json.message }}"
+            }
+          ]
+        }
+      },
+      "id": "node-openai-response",
+      "name": "OpenAI GPT-4o - Resposta Estratégica",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1.3,
+      "position": [
+        2020,
+        460
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "openai-nexo",
+          "name": "OpenAI NEXO"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const d = $('Construir System Prompt').first().json;\nconst aiItem = $('OpenAI GPT-4o - Resposta Estratégica').first();\n\n// Cada nó devolve o texto num campo diferente: o Basic LLM Chain usa \"text\",\n// o nó OpenAI legado usa message.content, a API crua usa choices[].\nconst aiJson = aiItem?.json || {};\nconst rawAnswer = aiJson.text\n  || aiJson.output\n  || aiJson.message?.content\n  || aiJson.choices?.[0]?.message?.content\n  || aiJson.response\n  || aiJson.content\n  || '';\nconst aiError = aiJson.error || null;\n\nconst endTime = Date.now();\nconst durationMs = endTime - (d.started_at || endTime);\n\nlet answer = rawAnswer;\nif (!answer || aiError) {\n  // Erro genérico não dá para depurar: o motivo real (modelo inválido, saldo,\n  // timeout, max_tokens) ficava só no log da execução. Agora vai para a tela.\n  const detalhe = aiError?.message\n    || aiError?.error?.message\n    || (typeof aiError === 'string' ? aiError : '')\n    || (aiError ? JSON.stringify(aiError).slice(0, 300) : '')\n    || ('o modelo respondeu, mas sem texto reconhecível. Campos recebidos: ' + (Object.keys(aiJson).join(', ') || 'nenhum'));\n  answer = '⚠️ Não foi possível processar sua consulta.\\n\\nDetalhe técnico: ' + detalhe;\n  console.error('[NEXO Assistant] Erro OpenAI: ' + JSON.stringify(aiError));\n}\n\nconst intent = d.classification?.intent || 'GENERAL';\nconst intentLabels = {\n  INTELLIGENCE: '🎯 Inteligência Estratégica',\n  MEDIA: '📰 Análise de Mídia',\n  SOCIAL: '📱 Redes Sociais',\n  ADVERSARY: '⚔️ Movimentações de Adversários',\n  CONTENT: '✍️ Conteúdo Gerado',\n  STRATEGY: '🧭 Recomendações Estratégicas',\n  RADAR: '📡 Radar Temático',\n  GENERAL: '💬 Consulta Estratégica'\n};\n\nconsole.log('[NEXO Assistant] Resposta gerada | Request: ' + d.request_id + ' | Tempo: ' + durationMs + 'ms | Intent: ' + intent);\n\nreturn [{\n  json: {\n    request_id: d.request_id,\n    user_id: d.user_id,\n    campaign_id: d.campaign_id,\n    intent,\n    intent_label: intentLabels[intent] || 'Consulta',\n    question: d.message,\n    answer,\n    metadata: {\n      mentions_analyzed: d.context?.stats?.total_mentions || 0,\n      critical_alerts: d.context?.stats?.critical_alerts || 0,\n      has_intelligence_report: d.context?.stats?.has_reports || false,\n      duration_ms: durationMs\n    },\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "node-format-response",
+      "name": "Formatar Resposta",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2240,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "responseCode": 200,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "name": "X-NEXO-Request-ID",
+                "value": "={{ $json.request_id }}"
+              }
+            ]
+          }
+        }
+      },
+      "id": "node-webhook-response",
+      "name": "Webhook Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        2460,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const d = $('Formatar Resposta').first().json;\nconsole.log('[NEXO Assistant] === LOG FINAL ===');\nconsole.log('Request ID: ' + d.request_id);\nconsole.log('User: ' + d.user_id);\nconsole.log('Campaign: ' + d.campaign_id);\nconsole.log('Intent: ' + d.intent);\nconsole.log('Menções analisadas: ' + d.metadata?.mentions_analyzed);\nconsole.log('Alertas críticos: ' + d.metadata?.critical_alerts);\nconsole.log('Tempo: ' + d.metadata?.duration_ms + 'ms');\nreturn [$input.first()];"
+      },
+      "id": "node-log-final",
+      "name": "Log Final",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2680,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || $input.first().json;\nconst message = (body.message || '').trim();\nconst campaignId = body.campaign_id || body.campaignId || null;\n\nif (!message) {\n  return [{\n    json: {\n      request_id: 'err_' + Date.now(),\n      error: true,\n      error_code: 'MISSING_MESSAGE',\n      message: 'O campo message é obrigatório.',\n      timestamp: new Date().toISOString()\n    }\n  }];\n}\n\nif (!campaignId) {\n  return [{\n    json: {\n      request_id: 'err_' + Date.now(),\n      error: true,\n      error_code: 'MISSING_CAMPAIGN_ID',\n      message: 'O campo campaign_id é obrigatório.',\n      timestamp: new Date().toISOString()\n    }\n  }];\n}\n\nreturn [$input.first()];"
+      },
+      "id": "node-input-error",
+      "name": "Resposta de Erro de Entrada",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        680,
+        660
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "responseCode": 400,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          }
+        }
+      },
+      "id": "node-error-response",
+      "name": "Webhook Error Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        900,
+        660
+      ]
+    },
+    {
+      "parameters": {
+        "errorMessage": "=Erro no NEXO Strategic Assistant: {{ $json.error?.message || $json.message || 'Erro desconhecido' }}"
+      },
+      "id": "node-error-trigger",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        240,
+        800
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const error = $input.first().json;\nconsole.error('[NEXO Assistant] ERRO CRÍTICO:', JSON.stringify(error, null, 2));\nreturn [{\n  json: {\n    request_id: 'err_' + Date.now(),\n    error: true,\n    error_code: 'INTERNAL_ERROR',\n    message: 'Erro interno no NEXO Assistant. Nossa equipe foi notificada.',\n    detail: error.error?.message || error.message || 'Erro desconhecido',\n    node: error.error?.node?.name || 'unknown',\n    occurred_at: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "node-handle-error",
+      "name": "Tratar Erro Crítico",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        460,
+        800
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "responseCode": 500,
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          }
+        }
+      },
+      "id": "node-error-500",
+      "name": "Webhook Response 500",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        680,
+        800
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "append",
+        "numberInputs": 6,
+        "options": {}
+      },
+      "id": "node-merge-contexto",
+      "name": "Combinar Dados Contexto",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.1,
+      "position": [
+        1450,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=SELECT metrics->>'date' AS date, (metrics->>'followers_count')::bigint AS followers_count, (metrics->>'follows_count')::bigint AS follows_count, (metrics->>'media_count')::bigint AS media_count, (metrics->>'reach')::bigint AS reach, (metrics->>'accounts_engaged')::bigint AS accounts_engaged, metrics->>'user_name' AS user_name FROM intelligence_snapshots WHERE campaign_id = '{{ $('Processar Classificação').item.json.campaign_id }}' AND period = 'instagram' ORDER BY metrics->>'date' DESC LIMIT 7",
+        "options": {}
+      },
+      "id": "node-fetch-instagram",
+      "name": "Buscar Instagram Insights",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1120,
+        720
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-nexo",
+          "name": "Postgres NEXO"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Webhook Entrada": {
+      "main": [
+        [
+          {
+            "node": "Validar Entrada",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validar Entrada": {
+      "main": [
+        [
+          {
+            "node": "Classificar Intenção (OpenAI)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ],
+      "error": [
+        [
+          {
+            "node": "Resposta de Erro de Entrada",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Classificar Intenção (OpenAI)": {
+      "main": [
+        [
+          {
+            "node": "Processar Classificação",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ],
+      "error": [
+        [
+          {
+            "node": "Processar Classificação",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Processar Classificação": {
+      "main": [
+        [
+          {
+            "node": "Buscar Dados da Campanha",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Buscar Relatórios de Inteligência",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Buscar Alertas Ativos",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Buscar Entidades",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Construir Query Dinâmica",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Buscar Instagram Insights",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Construir Query Dinâmica": {
+      "main": [
+        [
+          {
+            "node": "Buscar Menções Dinâmicas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Buscar Dados da Campanha": {
+      "main": [
+        [
+          {
+            "node": "Combinar Dados Contexto",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Buscar Relatórios de Inteligência": {
+      "main": [
+        [
+          {
+            "node": "Combinar Dados Contexto",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Buscar Alertas Ativos": {
+      "main": [
+        [
+          {
+            "node": "Combinar Dados Contexto",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Buscar Entidades": {
+      "main": [
+        [
+          {
+            "node": "Combinar Dados Contexto",
+            "type": "main",
+            "index": 3
+          }
+        ]
+      ]
+    },
+    "Buscar Menções Dinâmicas": {
+      "main": [
+        [
+          {
+            "node": "Combinar Dados Contexto",
+            "type": "main",
+            "index": 4
+          }
+        ]
+      ],
+      "error": [
+        [
+          {
+            "node": "Combinar Dados Contexto",
+            "type": "main",
+            "index": 4
+          }
+        ]
+      ]
+    },
+    "Construir Contexto Completo": {
+      "main": [
+        [
+          {
+            "node": "Construir System Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Construir System Prompt": {
+      "main": [
+        [
+          {
+            "node": "OpenAI GPT-4o - Resposta Estratégica",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI GPT-4o - Resposta Estratégica": {
+      "main": [
+        [
+          {
+            "node": "Formatar Resposta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ],
+      "error": [
+        [
+          {
+            "node": "Formatar Resposta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Formatar Resposta": {
+      "main": [
+        [
+          {
+            "node": "Webhook Response",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Log Final",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resposta de Erro de Entrada": {
+      "main": [
+        [
+          {
+            "node": "Webhook Error Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Tratar Erro Crítico",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tratar Erro Crítico": {
+      "main": [
+        [
+          {
+            "node": "Webhook Response 500",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Combinar Dados Contexto": {
+      "main": [
+        [
+          {
+            "node": "Construir Contexto Completo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Buscar Instagram Insights": {
+      "main": [
+        [
+          {
+            "node": "Combinar Dados Contexto",
+            "type": "main",
+            "index": 5
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "saveDataSuccessExecution": "all",
+    "saveDataErrorExecution": "all",
+    "timezone": "America/Sao_Paulo"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "NEXO"
+    },
+    {
+      "name": "assistant"
+    },
+    {
+      "name": "strategic"
+    },
+    {
+      "name": "webhook"
+    }
+  ],
+  "triggerCount": 0,
+  "updatedAt": "2026-06-25T00:00:00.000Z",
+  "versionId": "1"
+}
